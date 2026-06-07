@@ -1,0 +1,88 @@
+version: "3.9"
+
+services:
+  # ── MongoDB (local alternative to Atlas) ──────────────────
+  mongo:
+    image: mongo:7
+    container_name: nyxara_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: nyxara
+
+  # ── Redis (BEI velocity tracking) ─────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: nyxara_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --save 60 1 --loglevel warning
+
+  # ── AI Engine (Python/FastAPI) ─────────────────────────────
+  ai-engine:
+    build: ./ai-engine
+    container_name: nyxara_ai
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data:ro
+      - ./ai-engine/models/artifacts:/app/models/artifacts
+    environment:
+      - DATASET_PATH=/app/data/compressed_DataSet.xlsx
+      - MONGODB_URI=mongodb://mongo:27017/nyxara
+    depends_on:
+      - mongo
+
+  # ── Cybersec Engine (Python/FastAPI) ──────────────────────
+  cybersec-engine:
+    build: ./cybersec-engine
+    container_name: nyxara_cyber
+    ports:
+      - "8002:8002"
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+
+  # ── Blockchain Audit (Python/FastAPI) ─────────────────────
+  blockchain-audit:
+    build: ./blockchain-audit
+    container_name: nyxara_chain
+    ports:
+      - "8003:8003"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/nyxara
+    depends_on:
+      - mongo
+
+  # ── Backend (Node.js/Express) ──────────────────────────────
+  backend:
+    build: ./backend
+    container_name: nyxara_backend
+    ports:
+      - "8080:8080"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/nyxara
+      - AI_ENGINE_URL=http://ai-engine:8001
+      - CYBER_ENGINE_URL=http://cybersec-engine:8002
+      - BLOCKCHAIN_URL=http://blockchain-audit:8003
+      - JWT_SECRET=${JWT_SECRET}
+    depends_on:
+      - mongo
+      - ai-engine
+      - cybersec-engine
+      - blockchain-audit
+
+  # ── Frontend (React/Vite) ──────────────────────────────────
+  frontend:
+    build: ./frontend
+    container_name: nyxara_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:

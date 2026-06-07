@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
+
+# Models (large binary files — train locally)
+ai-engine/models/artifacts/*.pkl
+ai-engine/models/artifacts/*.pth
+ai-engine/models/artifacts/*.pt
+
+# Dataset (never commit customer data)
+data/
+*.xlsx
+*.csv
+
+# Node
+node_modules/
+.npm
+
+# Environment secrets
+.env
+*.env.local
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vite build
+frontend/dist/
+
+# Redis dump
+dump.rdb
