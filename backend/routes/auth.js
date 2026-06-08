@@ -4,6 +4,7 @@ const router  = express.Router();
 const bcrypt  = require("bcryptjs");
 const jwt     = require("jsonwebtoken");
 const User    = require("../models/User");
+const { authMiddleware } = require("../middleware/auth");
 
 const JWT_SECRET  = process.env.JWT_SECRET  || "dev_secret";
 const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || "8h";
@@ -40,8 +41,11 @@ router.post("/login", async (req, res, next) => {
 });
 
 // ── POST /api/auth/register (admin only in prod) ──────────────
-router.post("/register", async (req, res, next) => {
+router.post("/register", authMiddleware, async (req, res, next) => {
   try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Access denied — admin role required" });
+    }
     const { email, password, name, role } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 
@@ -56,15 +60,8 @@ router.post("/register", async (req, res, next) => {
 });
 
 // ── GET /api/auth/me ──────────────────────────────────────────
-router.get("/me", (req, res) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "No token" });
-  try {
-    const user = jwt.verify(token, JWT_SECRET);
-    res.json({ email: user.email, role: user.role, name: user.name });
-  } catch {
-    res.status(401).json({ error: "Invalid token" });
-  }
+router.get("/me", authMiddleware, (req, res) => {
+  res.json({ email: req.user.email, role: req.user.role, name: req.user.name });
 });
 
 module.exports = router;

@@ -47,6 +47,30 @@ router.get("/audit/:accountId", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/compliance/verify — blockchain chain integrity check
+router.get("/verify", async (req, res, next) => {
+  try {
+    const axios = require("axios");
+    const CHAIN_URL = process.env.BLOCKCHAIN_URL || "http://localhost:8003";
+    const { data } = await axios.get(`${CHAIN_URL}/v1/verify`, { timeout: 5000 });
+    res.json(data);
+  } catch {
+    res.json({ total: 0, tampered: 0, tampered_entries: [], integrity: true, message: "Blockchain engine unavailable" });
+  }
+});
+
+// GET /api/compliance/merkle-root — fetch latest Merkle root from blockchain
+router.get("/merkle-root", async (req, res, next) => {
+  try {
+    const axios = require("axios");
+    const CHAIN_URL = process.env.BLOCKCHAIN_URL || "http://localhost:8003";
+    const { data } = await axios.get(`${CHAIN_URL}/v1/merkle-root`, { timeout: 5000 });
+    res.json(data);
+  } catch {
+    res.json({ batchId: null, merkleRoot: null, leafCount: 0, message: "Blockchain engine unavailable" });
+  }
+});
+
 function _classifySTRType(account) {
   if (!account) return "suspicious_activity";
   const features = account.features || {};

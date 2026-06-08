@@ -49,6 +49,36 @@ router.get("/", async (req, res, next) => {
 });
 
 /**
+ * GET /api/alerts/stats/summary
+ * Quick summary counts for dashboard widgets.
+ * ⚠️ MUST be defined BEFORE /:id to avoid Express matching "stats" as an id param.
+ */
+router.get("/stats/summary", async (req, res, next) => {
+  try {
+    const [pending, confirmed, dismissed, escalated, total] = await Promise.all([
+      Alert.countDocuments({ analystAction: null }),
+      Alert.countDocuments({ analystAction: "confirmed" }),
+      Alert.countDocuments({ analystAction: "dismissed" }),
+      Alert.countDocuments({ analystAction: "escalated" }),
+      Alert.countDocuments(),
+    ]);
+
+    // By decision type
+    const [blocked, flagged, reviewed] = await Promise.all([
+      Alert.countDocuments({ decision: "BLOCK" }),
+      Alert.countDocuments({ decision: "FLAG" }),
+      Alert.countDocuments({ decision: "REVIEW" }),
+    ]);
+
+    res.json({
+      total,
+      byAction: { pending, confirmed, dismissed, escalated },
+      byDecision: { blocked, flagged, reviewed },
+    });
+  } catch (err) { next(err); }
+});
+
+/**
  * GET /api/alerts/:id
  * Single alert detail.
  */
@@ -96,35 +126,6 @@ router.patch("/:id/action", async (req, res, next) => {
     }
 
     res.json({ message: "Action recorded", alert });
-  } catch (err) { next(err); }
-});
-
-/**
- * GET /api/alerts/stats/summary
- * Quick summary counts for dashboard widgets.
- */
-router.get("/stats/summary", async (req, res, next) => {
-  try {
-    const [pending, confirmed, dismissed, escalated, total] = await Promise.all([
-      Alert.countDocuments({ analystAction: null }),
-      Alert.countDocuments({ analystAction: "confirmed" }),
-      Alert.countDocuments({ analystAction: "dismissed" }),
-      Alert.countDocuments({ analystAction: "escalated" }),
-      Alert.countDocuments(),
-    ]);
-
-    // By decision type
-    const [blocked, flagged, reviewed] = await Promise.all([
-      Alert.countDocuments({ decision: "BLOCK" }),
-      Alert.countDocuments({ decision: "FLAG" }),
-      Alert.countDocuments({ decision: "REVIEW" }),
-    ]);
-
-    res.json({
-      total,
-      byAction: { pending, confirmed, dismissed, escalated },
-      byDecision: { blocked, flagged, reviewed },
-    });
   } catch (err) { next(err); }
 });
 

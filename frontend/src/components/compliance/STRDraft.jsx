@@ -1,6 +1,7 @@
 // src/components/compliance/STRDraft.jsx
 import { useState } from "react";
 import { FileText, Download, CheckCircle, AlertTriangle } from "lucide-react";
+import api from "../../services/api";
 
 const STR_TYPE_LABELS = {
   mule_network:         "Mule Network Activity",
@@ -28,12 +29,20 @@ export default function STRDraft({ str, alertId, onFiled }) {
   }
 
   async function markFiled() {
+    if (!alertId) return;
     setSaving(true);
-    // TODO: call PATCH /api/alerts/:alertId/str-filed
-    await new Promise(r => setTimeout(r, 800));
-    setFiled(true);
-    setSaving(false);
-    onFiled?.();
+    try {
+      await api.patch(`/api/alerts/${alertId}/action`, {
+        action: "confirmed",
+        note: `STR Draft filed to FIU-IND. Observation period: ${fields.observation_period || "Last 90 days"}.`
+      });
+      setFiled(true);
+      onFiled?.();
+    } catch (err) {
+      console.error("Failed to mark STR as filed:", err);
+    } finally {
+      setSaving(false);
+    }
   }
 
   function exportTxt() {

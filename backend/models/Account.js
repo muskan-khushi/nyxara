@@ -14,7 +14,7 @@ const AccountSchema = new mongoose.Schema({
   graphScore:       Number,
   ringMembership:   Boolean,
   communityFraudRate: { type: Number, default: 0 },
-  shap:             [{ feature: String, shap_value: Number, raw_value: Number, direction: String }],
+  shap:             [{ feature: String, shap_value: Number, raw_value: mongoose.Schema.Types.Mixed, direction: String }],
   alertText:        String,
   overrideApplied:  Boolean,
   lastAnalyzed:     { type: Date, default: Date.now },
@@ -23,6 +23,5 @@ const AccountSchema = new mongoose.Schema({
 AccountSchema.index({ riskScore: -1 });
 AccountSchema.index({ lastAnalyzed: -1 });
 AccountSchema.index({ decision: 1 });
-AccountSchema.index({ accountId: 1 }, { unique: true });
 
 module.exports = mongoose.model("Account", AccountSchema);

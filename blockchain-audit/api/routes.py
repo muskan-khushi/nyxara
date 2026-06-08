@@ -29,7 +29,7 @@ async def verify():
 
 @router.get("/v1/merkle-root")
 async def merkle_root():
-    latest = ledger.batches_col.find_one(sort=[("timestamp", -1)])
+    latest = await ledger.batches_col.find_one(sort=[("timestamp", -1)])
     if not latest:
         return {"merkleRoot": None, "message": "No batches sealed yet"}
     return {"batchId": latest["batchId"], "merkleRoot": latest["merkleRoot"], "leafCount": latest["leafCount"]}

@@ -23,6 +23,7 @@ REQUIRED_ARTIFACTS = [
     "vae_model.pth",
     "vae_threshold.json",
     "eval_report.json",
+    "model_meta.json",
 ]
 
 

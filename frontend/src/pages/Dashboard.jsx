@@ -7,7 +7,7 @@ import AlertFeed       from "../components/dashboard/AlertFeed";
 import MetricsCards    from "../components/dashboard/MetricsCards";
 import FraudMap        from "../components/dashboard/FraudMap";
 import OccupationMatrix from "../components/dashboard/OccupationMatrix";
-import { Activity, AlertTriangle, CheckCircle, Clock } from "lucide-react";
+import { Activity, AlertTriangle, Clock } from "lucide-react";
 
 // Map numeric risk → decision label (mirrors scorer.py thresholds)
 function riskToDecision(score) {

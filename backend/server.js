@@ -51,18 +51,6 @@ app.use("/api/admin",      authMiddleware, adminRoutes);
 app.use("/api/compliance", authMiddleware, complianceRoutes);
 app.use("/api",            authMiddleware, graphRoutes);   // ← /api/rings + /api/clusters
 
-// Add compliance/verify endpoint (blockchain chain integrity check)
-app.get("/api/compliance/verify", authMiddleware, async (req, res) => {
-  try {
-    const axios = require("axios");
-    const CHAIN_URL = process.env.BLOCKCHAIN_URL || "http://localhost:8003";
-    const { data } = await axios.get(`${CHAIN_URL}/v1/verify`, { timeout: 5000 });
-    res.json(data);
-  } catch {
-    res.json({ total: 0, tampered: 0, tampered_entries: [], integrity: true, message: "Blockchain engine unavailable" });
-  }
-});
-
 app.get("/health", (req, res) => res.json({ status: "ok", service: "nyxara-backend" }));
 
 // ── WebSocket ──────────────────────────────────────────────────

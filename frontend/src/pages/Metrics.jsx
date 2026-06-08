@@ -6,15 +6,16 @@ import MetricsCards from "../components/dashboard/MetricsCards";
 export default function Metrics() {
   const [metrics, setMetrics] = useState(null);
   const [error,   setError]   = useState("");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get("/api/admin/stats")
-      .then(() => {
-        // Try to get metrics from AI engine via backend
-        setMetrics({ auc: 0.982, f1: 0.91, precision: 0.94, recall: 0.89,
-          confusion_matrix: [[8200, 82], [45, 755]], n_train: 6800, n_test: 1364, fraud_rate: 0.052 });
+    setLoading(true);
+    api.get("/api/admin/evaluate")
+      .then(r => {
+        setMetrics(r.data);
       })
-      .catch(() => setError("Could not load metrics. Ensure AI engine is running."));
+      .catch(() => setError("Could not load metrics. Ensure AI engine is running."))
+      .finally(() => setLoading(false));
   }, []);
 
   const cm = metrics?.confusion_matrix;
@@ -23,6 +24,7 @@ export default function Metrics() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-frost">Model Metrics</h1>
 
+      {loading && <p className="text-frost/50 text-sm">Loading model performance metrics...</p>}
       {error && <p className="text-amber text-sm">{error}</p>}
 
       {metrics && (
