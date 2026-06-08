@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-night text-frost font-sans;
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-abyss; }
+  ::-webkit-scrollbar-thumb { @apply bg-grape rounded-full; }
+}
+
+@layer components {
+  .card {
+    @apply bg-abyss border border-grape/20 rounded-xl p-5;
+  }
+  .card-hover {
+    @apply card transition-all duration-200 hover:border-grape/60 hover:shadow-lg hover:shadow-grape/10;
+  }
+  .btn-primary {
+    @apply bg-grape hover:bg-grape/80 text-white font-medium px-4 py-2 rounded-lg transition-colors duration-150;
+  }
+  .btn-danger {
+    @apply bg-crimson hover:bg-crimson/80 text-white font-medium px-4 py-2 rounded-lg transition-colors;
+  }
+  .btn-outline {
+    @apply border border-grape/50 hover:border-grape text-orchid hover:text-white px-4 py-2 rounded-lg transition-all;
+  }
+  .risk-badge-block  { @apply bg-crimson/20 text-crimson border border-crimson/40 px-2 py-0.5 rounded text-xs font-mono font-bold; }
+  .risk-badge-flag   { @apply bg-orange-500/20 text-orange-400 border border-orange-500/40 px-2 py-0.5 rounded text-xs font-mono font-bold; }
+  .risk-badge-review { @apply bg-amber/20 text-amber border border-amber/40 px-2 py-0.5 rounded text-xs font-mono font-bold; }
+  .risk-badge-approve{ @apply bg-jade/20 text-jade border border-jade/40 px-2 py-0.5 rounded text-xs font-mono font-bold; }
+  .input {
+    @apply bg-night border border-grape/30 focus:border-grape focus:ring-1 focus:ring-grape text-frost rounded-lg px-3 py-2 outline-none transition-all w-full;
+  }
+  .glow-grape { box-shadow: 0 0 20px rgba(123, 47, 190, 0.4); }
+}
