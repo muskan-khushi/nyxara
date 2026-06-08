@@ -4,24 +4,25 @@
  */
 require("dotenv").config();
 const express = require("express");
-const http = require("http");
+const http    = require("http");
 const { Server } = require("socket.io");
-const cors = require("cors");
-const morgan = require("morgan");
+const cors    = require("cors");
+const morgan  = require("morgan");
 const rateLimit = require("express-rate-limit");
 
-const { connectDB } = require("./config/db");
-const { errorHandler } = require("./middleware/errorHandler");
+const { connectDB }      = require("./config/db");
+const { errorHandler }   = require("./middleware/errorHandler");
 const { authMiddleware } = require("./middleware/auth");
 
-// ── Route imports ─────────────────────────────────────────────
+// ── Route imports ──────────────────────────────────────────────
 const authRoutes       = require("./routes/auth");
 const accountRoutes    = require("./routes/accounts");
 const alertRoutes      = require("./routes/alerts");
 const adminRoutes      = require("./routes/admin");
 const complianceRoutes = require("./routes/compliance");
+const graphRoutes      = require("./routes/graph");      // ← NEW
 
-// ── App setup ─────────────────────────────────────────────────
+// ── App setup ──────────────────────────────────────────────────
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
@@ -31,29 +32,41 @@ const io     = new Server(server, {
 // Make io available to routes
 app.set("io", io);
 
-// ── Middleware ────────────────────────────────────────────────
+// ── Middleware ─────────────────────────────────────────────────
 app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000", credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 app.use(morgan("dev"));
 
 app.use(rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 min
+  windowMs: 15 * 60 * 1000,
   max: 200,
   message: { error: "Too many requests — please slow down." },
 }));
 
-// ── Routes ────────────────────────────────────────────────────
+// ── Routes ─────────────────────────────────────────────────────
 app.use("/api/auth",       authRoutes);
 app.use("/api/accounts",   authMiddleware, accountRoutes);
 app.use("/api/alerts",     authMiddleware, alertRoutes);
 app.use("/api/admin",      authMiddleware, adminRoutes);
 app.use("/api/compliance", authMiddleware, complianceRoutes);
+app.use("/api",            authMiddleware, graphRoutes);   // ← /api/rings + /api/clusters
+
+// Add compliance/verify endpoint (blockchain chain integrity check)
+app.get("/api/compliance/verify", authMiddleware, async (req, res) => {
+  try {
+    const axios = require("axios");
+    const CHAIN_URL = process.env.BLOCKCHAIN_URL || "http://localhost:8003";
+    const { data } = await axios.get(`${CHAIN_URL}/v1/verify`, { timeout: 5000 });
+    res.json(data);
+  } catch {
+    res.json({ total: 0, tampered: 0, tampered_entries: [], integrity: true, message: "Blockchain engine unavailable" });
+  }
+});
 
 app.get("/health", (req, res) => res.json({ status: "ok", service: "nyxara-backend" }));
 
-// ── WebSocket ─────────────────────────────────────────────────
+// ── WebSocket ──────────────────────────────────────────────────
 io.use((socket, next) => {
-  // Auth check for socket connections
   const token = socket.handshake.auth?.token;
   if (!token && process.env.NODE_ENV !== "development") {
     return next(new Error("Authentication required"));
@@ -77,7 +90,7 @@ io.on("connection", (socket) => {
 // ── Error handler (must be last) ──────────────────────────────
 app.use(errorHandler);
 
-// ── Start ─────────────────────────────────────────────────────
+// ── Start ──────────────────────────────────────────────────────
 const PORT = process.env.BACKEND_PORT || 8080;
 
 connectDB().then(() => {

@@ -1,114 +1,87 @@
-// src/components/compliance/MerkleViewer.jsx
-import { useEffect, useRef } from "react";
+// src/components/dashboard/FraudMap.jsx
+// Branch-code heat map: F3889 branch → fraud rate.
+// Shows which bank branches are hotspots for mule account activity.
 
-function truncate(hash, n = 8) {
-  if (!hash) return "empty";
-  return hash.slice(0, n) + "…";
+const DEMO_BRANCHES = [
+  { branch: "G365D", fraudRate: 0.81, total: 42,  flagged: 34 },
+  { branch: "B210A", fraudRate: 0.67, total: 38,  flagged: 25 },
+  { branch: "K401C", fraudRate: 0.54, total: 61,  flagged: 33 },
+  { branch: "M330F", fraudRate: 0.41, total: 29,  flagged: 12 },
+  { branch: "R180E", fraudRate: 0.28, total: 55,  flagged: 15 },
+  { branch: "H290B", fraudRate: 0.19, total: 47,  flagged:  9 },
+  { branch: "T550G", fraudRate: 0.11, total: 63,  flagged:  7 },
+  { branch: "P445D", fraudRate: 0.06, total: 72,  flagged:  4 },
+];
+
+function heatColor(rate) {
+  if (rate > 0.70) return { bar: "#DC2626", bg: "bg-crimson/20",  text: "text-crimson",       label: "CRITICAL" };
+  if (rate > 0.50) return { bar: "#F97316", bg: "bg-orange-500/15", text: "text-orange-400",  label: "HIGH" };
+  if (rate > 0.30) return { bar: "#F59E0B", bg: "bg-amber/15",    text: "text-amber",         label: "MEDIUM" };
+  if (rate > 0.15) return { bar: "#84CC16", bg: "bg-lime-500/10", text: "text-lime-400",      label: "LOW" };
+  return               { bar: "#10B981", bg: "bg-jade/10",        text: "text-jade",           label: "SAFE" };
 }
 
-export default function MerkleViewer({ batchId, merkleRoot, leafCount, levels = [] }) {
-  const canvasRef = useRef();
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
-
-    if (!merkleRoot) {
-      ctx.fillStyle = "rgba(245,243,255,0.2)";
-      ctx.font      = "13px Inter";
-      ctx.textAlign = "center";
-      ctx.fillText("No Merkle batch sealed yet", W / 2, H / 2);
-      return;
-    }
-
-    // Draw simplified 3-level visual tree
-    // Root → 4 children → 8 leaves (representative)
-    const drawNode = (x, y, hash, color = "#7B2FBE", radius = 28) => {
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, 2 * Math.PI);
-      ctx.fillStyle   = color + "20";
-      ctx.fill();
-      ctx.strokeStyle = color;
-      ctx.lineWidth   = 1.5;
-      ctx.stroke();
-
-      ctx.fillStyle  = "#F5F3FF90";
-      ctx.font       = "8px monospace";
-      ctx.textAlign  = "center";
-      ctx.fillText(truncate(hash, 6), x, y + 2);
-    };
-
-    const drawLine = (x1, y1, x2, y2) => {
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.strokeStyle = "rgba(123,47,190,0.3)";
-      ctx.lineWidth   = 1;
-      ctx.stroke();
-    };
-
-    const rootY    = 40;
-    const level1Y  = 110;
-    const level2Y  = 180;
-
-    // Root
-    drawNode(W / 2, rootY, merkleRoot, "#C084FC", 32);
-    ctx.fillStyle = "#C084FC";
-    ctx.font      = "10px Inter";
-    ctx.textAlign = "center";
-    ctx.fillText("Merkle Root", W / 2, rootY - 42);
-    ctx.fillText(`Batch: ${batchId || "—"}`, W / 2, rootY - 28);
-
-    // Level 1 — 4 child nodes
-    const l1xs = [W * 0.15, W * 0.38, W * 0.62, W * 0.85];
-    l1xs.forEach(x => {
-      drawLine(W / 2, rootY + 32, x, level1Y - 22);
-      drawNode(x, level1Y, "h" + Math.random().toString(36).slice(2, 8), "#7B2FBE", 22);
-    });
-
-    // Level 2 — 8 leaf nodes
-    const l2xs = [W * 0.06, W * 0.22, W * 0.38, W * 0.50, W * 0.60, W * 0.72, W * 0.85, W * 0.94];
-    l2xs.forEach((x, i) => {
-      const parent = l1xs[Math.floor(i / 2)];
-      drawLine(parent, level1Y + 22, x, level2Y - 18);
-      drawNode(x, level2Y, "leaf" + i, "#06B6D4", 18);
-    });
-
-    // Stats below
-    ctx.fillStyle = "rgba(245,243,255,0.4)";
-    ctx.font      = "10px Inter";
-    ctx.textAlign = "center";
-    ctx.fillText(`${leafCount || 0} decisions in batch`, W / 2, H - 20);
-
-  }, [batchId, merkleRoot, leafCount]);
+export default function FraudMap({ branches = DEMO_BRANCHES }) {
+  const sorted = [...branches].sort((a, b) => b.fraudRate - a.fraudRate);
 
   return (
     <div className="space-y-3">
-      <div className="bg-night/60 rounded-lg p-3 border border-grape/20">
-        <p className="text-frost/50 text-xs font-semibold mb-2">Merkle Root</p>
-        <p className="text-orchid font-mono text-xs break-all">{merkleRoot || "No batch sealed yet"}</p>
-        {batchId && (
-          <div className="flex gap-4 mt-2 text-xs text-frost/40">
-            <span>Batch: <span className="text-frost/60 font-mono">{batchId}</span></span>
-            <span>Leaves: <span className="text-frost/60 font-mono">{leafCount}</span></span>
-          </div>
-        )}
+      <div className="flex items-center justify-between">
+        <p className="text-frost/50 text-xs">Branch Code → Fraud Rate (F3889 forensic mapping)</p>
+        <p className="text-frost/30 text-[10px]">Demo data — connect AI engine for live stats</p>
       </div>
 
-      <canvas
-        ref={canvasRef}
-        width={500}
-        height={240}
-        className="w-full rounded-lg"
-        style={{ background: "rgba(18,8,46,0.7)" }}
-      />
+      <div className="space-y-1.5">
+        {sorted.map((b) => {
+          const c = heatColor(b.fraudRate);
+          return (
+            <div key={b.branch} className={`rounded-lg px-3 py-2 border border-transparent ${c.bg} hover:border-grape/30 transition-colors`}>
+              <div className="flex items-center gap-3">
+                {/* Branch code */}
+                <span className="text-frost/70 font-mono text-xs w-14 flex-shrink-0">{b.branch}</span>
 
-      <p className="text-frost/25 text-xs text-center">
-        Visual representation — leaf hashes → branch hashes → root hash (SHA-256)
-      </p>
+                {/* Bar */}
+                <div className="flex-1 h-2 bg-night/60 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-700"
+                    style={{ width: `${b.fraudRate * 100}%`, background: c.bar }}
+                  />
+                </div>
+
+                {/* Pct */}
+                <span className={`font-mono font-bold text-xs w-10 text-right ${c.text}`}>
+                  {(b.fraudRate * 100).toFixed(0)}%
+                </span>
+
+                {/* Count */}
+                <span className="text-frost/30 text-[10px] w-16 text-right flex-shrink-0">
+                  {b.flagged}/{b.total}
+                </span>
+
+                {/* Badge */}
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${c.bg} ${c.text} border border-current/30 w-14 text-center flex-shrink-0`}>
+                  {c.label}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div className="flex gap-3 pt-1 flex-wrap">
+        {[
+          { label: "Critical (>70%)", color: "bg-crimson" },
+          { label: "High (>50%)",     color: "bg-orange-500" },
+          { label: "Medium (>30%)",   color: "bg-amber" },
+          { label: "Safe (<15%)",     color: "bg-jade" },
+        ].map(({ label, color }) => (
+          <div key={label} className="flex items-center gap-1.5 text-[10px] text-frost/40">
+            <div className={`w-2 h-2 rounded-full ${color}`} />
+            {label}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

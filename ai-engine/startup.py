@@ -14,6 +14,7 @@ ARTIFACTS_DIR = Path(__file__).parent / "models" / "artifacts"
 REQUIRED_ARTIFACTS = [
     "selected_features.json",
     "norm_params.json",
+    "encoders.json",          # ← was missing from original list
     "xgb_model.pkl",
     "lgbm_model.pkl",
     "catboost_model.pkl",
@@ -26,7 +27,10 @@ REQUIRED_ARTIFACTS = [
 
 
 def _artifacts_exist() -> bool:
-    return all((ARTIFACTS_DIR / f).exists() for f in REQUIRED_ARTIFACTS)
+    missing = [f for f in REQUIRED_ARTIFACTS if not (ARTIFACTS_DIR / f).exists()]
+    if missing:
+        logger.info(f"Missing artifacts: {missing}")
+    return len(missing) == 0
 
 
 async def ensure_models_ready():
@@ -39,8 +43,12 @@ async def ensure_models_ready():
 
     if _artifacts_exist():
         logger.info("✅ All model artifacts found — loading inference cache.")
-        from inference.cache import warm_cache
-        await warm_cache()
+        try:
+            from inference.cache import warm_cache
+            await warm_cache()
+        except Exception as e:
+            logger.error(f"❌ Cache warming failed: {e}")
+            logger.warning("API will serve demo/fallback responses until models are loaded.")
         return
 
     logger.warning(
@@ -53,13 +61,16 @@ async def ensure_models_ready():
     if not Path(dataset_path).exists():
         logger.error(
             f"❌ Dataset not found at {dataset_path}. "
-            "Copy compressed_DataSet.xlsx to the data/ folder and restart."
+            "Copy compressed_DataSet.xlsx to the data/ folder and restart. "
+            "The API will still serve demo responses in the meantime."
         )
         return
 
-    # Import here to avoid slow imports at module load time
-    from training.run_all import run_full_pipeline
-    run_full_pipeline(dataset_path=dataset_path)
-    logger.info("✅ Training complete — warming inference cache.")
-    from inference.cache import warm_cache
-    await warm_cache()
+    try:
+        from training.run_all import run_full_pipeline
+        run_full_pipeline(dataset_path=dataset_path)
+        logger.info("✅ Training complete — warming inference cache.")
+        from inference.cache import warm_cache
+        await warm_cache()
+    except Exception as e:
+        logger.error(f"❌ Training pipeline failed: {e}")

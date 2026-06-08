@@ -1,75 +1,239 @@
 // src/pages/GraphView.jsx
-import { useEffect, useRef } from "react";
-import * as d3 from "d3";
+import { useEffect, useState, useCallback } from "react";
+import api from "../services/api";
+import NetworkGraph   from "../components/graph/NetworkGraph";
+import RingViewer     from "../components/graph/RingViewer";
+import CommunityView  from "../components/graph/CommunityView";
+import { RefreshCw, Network, GitBranch, Share2 } from "lucide-react";
+
+const TABS = [
+  { id: "network",    label: "Network Graph", icon: Network },
+  { id: "rings",      label: "Ring Topology", icon: GitBranch },
+  { id: "community",  label: "Communities",   icon: Share2 },
+];
+
+function buildGraphFromRings(rings) {
+  const nodeMap = new Map();
+  const links   = [];
+
+  rings.forEach(ring => {
+    Object.entries(ring.roles || {}).forEach(([acctId, role]) => {
+      if (!nodeMap.has(acctId)) {
+        nodeMap.set(acctId, {
+          id:       acctId,
+          risk:     ring.fraud_rate * 0.9 + 0.1 * Math.random(),
+          role,
+          in_ring:  true,
+          ring_id:  ring.ring_id,
+          shape:    ring.shape,
+        });
+      }
+    });
+
+    const accounts = ring.accounts || [];
+    const hub      = ring.hub_node;
+
+    if (ring.shape === "STAR" && hub) {
+      accounts.filter(a => a !== hub).forEach(mule => {
+        links.push({ source: hub, target: mule });
+      });
+    } else {
+      for (let i = 0; i < accounts.length - 1; i++) {
+        links.push({ source: accounts[i], target: accounts[i + 1] });
+      }
+      if (ring.shape === "CYCLE" && accounts.length > 1) {
+        links.push({ source: accounts[accounts.length - 1], target: accounts[0] });
+      }
+    }
+  });
+
+  return {
+    nodes: Array.from(nodeMap.values()),
+    links,
+  };
+}
 
 export default function GraphView() {
-  const svgRef = useRef();
+  const [tab,         setTab]         = useState("network");
+  const [rings,       setRings]       = useState([]);
+  const [communities, setCommunities] = useState([]);
+  const [graphData,   setGraphData]   = useState({ nodes: [], links: [] });
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState("");
+  const [selected,    setSelected]    = useState(null);
+  const [lastRefresh, setLastRefresh] = useState(null);
 
-  useEffect(() => {
-    // Demo graph — replace with real data from GET /v1/rings
-    const nodes = [
-      { id: "HUB-001", risk: 0.95, role: "hub" },
-      { id: "MUL-002", risk: 0.82, role: "mule" },
-      { id: "MUL-003", risk: 0.78, role: "mule" },
-      { id: "MUL-004", risk: 0.71, role: "mule" },
-      { id: "BRG-005", risk: 0.65, role: "bridge" },
-      { id: "LEG-006", risk: 0.12, role: "legitimate" },
-    ];
-    const links = [
-      { source: "HUB-001", target: "MUL-002" },
-      { source: "HUB-001", target: "MUL-003" },
-      { source: "HUB-001", target: "MUL-004" },
-      { source: "MUL-004", target: "BRG-005" },
-      { source: "BRG-005", target: "LEG-006" },
-    ];
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const [rRes, cRes] = await Promise.allSettled([
+        api.get("/api/rings"),
+        api.get("/api/clusters"),
+      ]);
 
-    const W = 700, H = 420;
-    const svg = d3.select(svgRef.current).attr("viewBox", `0 0 ${W} ${H}`);
-    svg.selectAll("*").remove();
+      const fetchedRings = rRes.status === "fulfilled"
+        ? (rRes.value.data.rings || [])
+        : [];
 
-    const color = r => r > 0.85 ? "#DC2626" : r > 0.7 ? "#F97316" : r > 0.4 ? "#F59E0B" : "#10B981";
+      const fetchedCommunities = cRes.status === "fulfilled"
+        ? (cRes.value.data.clusters || [])
+        : [];
 
-    const sim = d3.forceSimulation(nodes)
-      .force("link",   d3.forceLink(links).id(d => d.id).distance(90))
-      .force("charge", d3.forceManyBody().strength(-200))
-      .force("center", d3.forceCenter(W / 2, H / 2));
-
-    const link = svg.append("g").selectAll("line").data(links).enter().append("line")
-      .attr("stroke", "#7B2FBE60").attr("stroke-width", 1.5);
-
-    const node = svg.append("g").selectAll("g").data(nodes).enter().append("g")
-      .call(d3.drag().on("start", (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-                     .on("drag",  (e, d) => { d.fx = e.x; d.fy = e.y; })
-                     .on("end",   (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
-
-    node.append("circle")
-      .attr("r",    d => d.role === "hub" ? 18 : 12)
-      .attr("fill", d => color(d.risk) + "30")
-      .attr("stroke", d => color(d.risk))
-      .attr("stroke-width", d => d.role === "hub" ? 3 : 1.5);
-
-    node.append("text")
-      .text(d => d.id)
-      .attr("text-anchor", "middle")
-      .attr("dy", "2.5em")
-      .attr("fill", "#F5F3FF90")
-      .attr("font-size", 9)
-      .attr("font-family", "monospace");
-
-    sim.on("tick", () => {
-      link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
-          .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
-      node.attr("transform", d => `translate(${d.x},${d.y})`);
-    });
+      setRings(fetchedRings);
+      setCommunities(fetchedCommunities);
+      setGraphData(buildGraphFromRings(fetchedRings));
+      setLastRefresh(new Date());
+    } catch (e) {
+      setError("Could not load graph data. Is the AI engine running?");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => { load(); }, [load]);
+
+  const statsBar = [
+    { label: "Rings",       value: rings.length,                        color: "text-orchid" },
+    { label: "Ring Nodes",  value: graphData.nodes.length,              color: "text-cyan" },
+    { label: "Communities", value: communities.length,                  color: "text-amber" },
+    { label: "High-Risk",   value: communities.filter(c => c.fraud_rate > 0.5).length, color: "text-crimson" },
+  ];
+
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-frost">Graph View</h1>
-      <p className="text-frost/50 text-sm">Live mule account network topology — D3.js force-directed</p>
-      <div className="card">
-        <svg ref={svgRef} className="w-full" style={{ minHeight: 420, background: "rgba(18,8,46,0.6)", borderRadius: 8 }} />
-        <p className="text-frost/30 text-xs mt-2 text-center">Demo graph — connect AI engine to load real ring data</p>
+    <div className="space-y-4 h-full">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-frost">Graph View</h1>
+          <p className="text-frost/50 text-sm mt-0.5">
+            Mule account network topology — GNN-detected rings &amp; Louvain communities
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {lastRefresh && (
+            <span className="text-frost/30 text-xs font-mono">
+              {lastRefresh.toLocaleTimeString()}
+            </span>
+          )}
+          <button
+            onClick={load}
+            disabled={loading}
+            className="btn-outline text-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Stats bar */}
+      <div className="grid grid-cols-4 gap-3">
+        {statsBar.map(({ label, value, color }) => (
+          <div key={label} className="card py-3 text-center">
+            <p className={`text-2xl font-bold font-mono ${color}`}>{value}</p>
+            <p className="text-frost/40 text-xs mt-0.5">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {error && (
+        <div className="bg-amber/10 border border-amber/30 text-amber rounded-lg px-4 py-3 text-sm">
+          ⚠️ {error}
+        </div>
+      )}
+
+      {/* Tab switcher */}
+      <div className="flex gap-1 bg-abyss rounded-lg p-1 w-fit">
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`flex items-center gap-2 px-4 py-2 rounded text-sm font-medium transition-all ${
+              tab === id
+                ? "bg-grape text-white shadow"
+                : "text-frost/50 hover:text-frost"
+            }`}
+          >
+            <Icon className="w-4 h-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div className="card min-h-[520px]">
+        {loading ? (
+          <div className="flex items-center justify-center h-64 text-frost/30 text-sm">
+            <RefreshCw className="w-5 h-5 animate-spin mr-2" /> Loading graph data...
+          </div>
+        ) : (
+          <>
+            {tab === "network" && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-frost/60 text-sm">
+                    {graphData.nodes.length} nodes · {graphData.links.length} edges
+                    {selected && (
+                      <span className="ml-3 text-orchid font-mono">
+                        Selected: {selected.id} ({selected.role})
+                      </span>
+                    )}
+                  </p>
+                  <div className="flex gap-3 text-[10px] text-frost/40">
+                    {[
+                      { icon: "◆", label: "Hub/Orchestrator" },
+                      { icon: "▲", label: "Bridge" },
+                      { icon: "●", label: "Mule/Member" },
+                    ].map(({ icon, label }) => (
+                      <span key={label}>{icon} {label}</span>
+                    ))}
+                  </div>
+                </div>
+                {graphData.nodes.length > 0 ? (
+                  <NetworkGraph
+                    nodes={graphData.nodes}
+                    links={graphData.links}
+                    onNodeClick={setSelected}
+                    height={480}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-frost/30 text-sm text-center">
+                    <div>
+                      <p className="text-4xl mb-3">🕸️</p>
+                      <p>No ring data yet. Run <code className="text-orchid">training/run_all.py</code> to detect rings.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Selected node detail */}
+                {selected && (
+                  <div className="bg-night/60 rounded-lg border border-grape/30 p-3 text-sm grid grid-cols-3 gap-3">
+                    <div>
+                      <p className="text-frost/40 text-xs">Account</p>
+                      <p className="text-frost font-mono">{selected.id}</p>
+                    </div>
+                    <div>
+                      <p className="text-frost/40 text-xs">Risk Score</p>
+                      <p className="font-mono font-bold" style={{
+                        color: selected.risk > 0.85 ? "#DC2626" : selected.risk > 0.7 ? "#F97316" : "#F59E0B"
+                      }}>
+                        {(selected.risk * 100).toFixed(0)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-frost/40 text-xs">Role</p>
+                      <p className="text-orchid font-medium capitalize">{selected.role}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tab === "rings" && <RingViewer rings={rings} />}
+
+            {tab === "community" && <CommunityView communities={communities} />}
+          </>
+        )}
       </div>
     </div>
   );

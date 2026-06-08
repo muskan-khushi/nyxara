@@ -26,4 +26,9 @@ async function getRings() {
   return data;
 }
 
-module.exports = { score, getMetrics, getRings };
+async function getClusters() {
+  const { data } = await axios.get(`${AI_URL}/v1/clusters`, { timeout: 5000 });
+  return data;
+}
+
+module.exports = { score, getMetrics, getRings, getClusters };

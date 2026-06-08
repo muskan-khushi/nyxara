@@ -2,19 +2,22 @@
 models/gnn/ring_detector.py
 DFS-based ring/cycle detection in the account transaction graph.
 Detects: STAR, CHAIN, CYCLE, CLUSTER, BIPARTITE typologies.
-Results cached to MongoDB rings collection.
+Results cached to MongoDB rings collection AND to artifacts/rings_cache.json.
 
 Max 6 hops, 25s time budget per search as per spec.
 """
+import json
 import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 import networkx as nx
 import numpy as np
 
 logger = logging.getLogger("nyxara.ring_detector")
 
+ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
 MAX_HOPS    = 6
 TIME_BUDGET = 25.0   # seconds per ring search
 MIN_RING_SIZE = 3    # minimum accounts to form a ring
@@ -45,7 +48,7 @@ def build_networkx_graph(
     return G
 
 
-# ─── Typology detectors ───────────────────────────────────────
+# ─── Typology detectors ────────────────────────────────────────
 
 def _detect_star(G: nx.DiGraph, node: int, account_ids: list[str], min_spokes: int = 3) -> Ring | None:
     """Hub with high out-degree and low in-degree."""
@@ -116,7 +119,6 @@ def _detect_cycles(G: nx.DiGraph, account_ids: list[str]) -> list[Ring]:
         if len(scc) < MIN_RING_SIZE:
             continue
         members = [account_ids[n] for n in scc]
-        # Compute reciprocity within SCC
         sub = G.subgraph(scc)
         recip = nx.reciprocity(sub) if sub.number_of_edges() > 0 else 0.0
 
@@ -145,11 +147,10 @@ def _detect_clusters(G: nx.DiGraph, account_ids: list[str]) -> list[Ring]:
         n   = len(component)
         density = nx.density(sub)
 
-        if density < 0.4:   # Not dense enough to be a cluster ring
+        if density < 0.4:
             continue
 
         members = [account_ids[n_] for n_ in component]
-        # Highest degree node = coordinator
         degrees = dict(sub.degree())
         hub_idx = max(degrees, key=degrees.get)
         hub_id  = account_ids[hub_idx]
@@ -169,17 +170,14 @@ def _detect_clusters(G: nx.DiGraph, account_ids: list[str]) -> list[Ring]:
     return rings
 
 
-# ─── Master detector ──────────────────────────────────────────
+# ─── Master detector ───────────────────────────────────────────
 
 def detect_all_rings(
     G: nx.DiGraph,
     account_ids: list[str],
     gnn_scores: np.ndarray | None = None,
 ) -> list[Ring]:
-    """
-    Run all ring detectors on the graph.
-    Returns deduplicated list of Ring objects.
-    """
+    """Run all ring detectors. Returns deduplicated list of Ring objects."""
     start_total = time.time()
     all_rings: list[Ring] = []
     seen_accounts: set[frozenset] = set()
@@ -192,8 +190,7 @@ def detect_all_rings(
         return False
 
     # Cycles first (most definitive)
-    cycles = _detect_cycles(G, account_ids)
-    for r in cycles:
+    for r in _detect_cycles(G, account_ids):
         if not _is_duplicate(r):
             all_rings.append(r)
 
@@ -209,14 +206,13 @@ def detect_all_rings(
     for node in G.nodes():
         if time.time() - start_total > 90:
             break
-        if G.in_degree(node) == 0:   # Only start from sources
+        if G.in_degree(node) == 0:
             ring = _detect_chain(G, node, account_ids)
             if ring and not _is_duplicate(ring):
                 all_rings.append(ring)
 
     # Dense clusters
-    clusters = _detect_clusters(G, account_ids)
-    for r in clusters:
+    for r in _detect_clusters(G, account_ids):
         if not _is_duplicate(r):
             all_rings.append(r)
 
@@ -252,3 +248,15 @@ def rings_to_dicts(rings: list[Ring]) -> list[dict]:
         }
         for r in rings
     ]
+
+
+def save_rings_to_artifacts(rings: list[Ring]):
+    """
+    Persist detected rings to artifacts/rings_cache.json so the /v1/rings
+    API route can serve them without a DB connection.
+    """
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    ring_dicts = rings_to_dicts(rings)
+    with open(ARTIFACTS_DIR / "rings_cache.json", "w") as f:
+        json.dump({"rings": ring_dicts, "total": len(ring_dicts)}, f, indent=2)
+    logger.info(f"Saved {len(ring_dicts)} rings to artifacts/rings_cache.json")
