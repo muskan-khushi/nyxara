@@ -1,7 +1,7 @@
 """
 inference/alert_narrator.py
 Generate plain-English compliance alerts from ML output.
-Uses Anthropic Claude API. Falls back to rule-based template if no API key.
+Uses Groq API. Falls back to rule-based template if no API key.
 """
 import logging
 import os
@@ -9,7 +9,7 @@ from typing import Optional
 
 logger = logging.getLogger("nyxara.narrator")
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # Risk level labels for prompt
 DECISION_LABELS = {
@@ -68,7 +68,7 @@ def _rule_based_alert(
     top_factors: list[dict],
     ring_membership: bool,
 ) -> str:
-    """Fallback alert when no Anthropic API key is configured."""
+    """Fallback alert when no Groq API key is configured."""
     risk_label = DECISION_LABELS.get(decision, "HIGH")
     top_feature = top_factors[0]["feature"] if top_factors else "transaction velocity"
 
@@ -101,33 +101,33 @@ async def generate_alert(
 ) -> str:
     """
     Generate compliance alert text.
-    Uses Anthropic API if key configured, otherwise rule-based fallback.
+    Uses Groq API if key configured, otherwise rule-based fallback.
     """
-    if not ANTHROPIC_API_KEY:
-        logger.debug("No Anthropic API key — using rule-based alert narrator.")
+    if not GROQ_API_KEY:
+        logger.debug("No Groq API key — using rule-based alert narrator.")
         return _rule_based_alert(
             account_id, decision, final_risk, occupation, top_factors, ring_membership
         )
 
     try:
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        from groq import AsyncGroq
+        client = AsyncGroq(api_key=GROQ_API_KEY)
 
         prompt = _build_prompt(
             account_id, decision, final_risk, occupation,
             top_factors, ring_membership, community_fraud_rate
         )
 
-        message = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=300,
+        chat_completion = await client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
+            model="llama-3.1-8b-instant",
+            max_tokens=300,
         )
 
-        return message.content[0].text.strip()
+        return chat_completion.choices[0].message.content.strip()
 
     except Exception as e:
-        logger.warning(f"Anthropic API call failed ({e}) — falling back to rule-based alert.")
+        logger.warning(f"Groq API call failed ({e}) — falling back to rule-based alert.")
         return _rule_based_alert(
             account_id, decision, final_risk, occupation, top_factors, ring_membership
         )

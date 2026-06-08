@@ -30,7 +30,7 @@ def load_dataset(path: str | Path, nrows: int | None = None) -> tuple[pd.DataFra
     Load XLSX dataset. Returns (X_features, y_target).
 
     Args:
-        path: Path to compressed_DataSet.xlsx
+        path: Path to dataset.xlsx
         nrows: If set, load only first N rows (useful for quick EDA)
 
     Returns:

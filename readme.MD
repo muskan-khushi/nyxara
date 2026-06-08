@@ -220,7 +220,7 @@ graph LR
 | **3** | **Gradient Boosted Ensemble** | XGBoost + LightGBM + CatBoost + Meta-Learner | Tabular financial anomalies | Three diverse learners with stacking meta-learner eliminate individual model blind spots |
 | **4** | **Variational AutoEncoder (VAE)** | Encoder-Decoder with KL divergence | Zero-day mule tactics via reconstruction error | High reconstruction error = the model has *never seen this pattern* = novel threat |
 | **5** | **LineMVGNN** | Multi-View Graph Neural Network | Simultaneous account + transaction graph | Analyzes the *line graph* (edge-centric view) alongside the node graph for dual perspective |
-| **6** | **SHAP + LLM Narration** | TreeSHAP + Anthropic Claude | Explainability → FIU-IND STR compliance | Every flag comes with *human-readable reasoning* — not a black-box score |
+| **6** | **SHAP + LLM Narration** | TreeSHAP + Groq Llama 3 | Explainability → FIU-IND STR compliance | Every flag comes with *human-readable reasoning* — not a black-box score |
 
 > [!TIP]
 > **Weighted Fusion** — The final risk score is computed via configurable weighted fusion:
@@ -323,7 +323,7 @@ Every risk decision Nyxara makes is **cryptographically sealed** into an immutab
 
 | Property | Value |
 |:---------|:------|
-| File | `compressed_DataSet.xlsx` |
+| File | `dataset.xlsx` |
 | Rows | **9,082** accounts |
 | Raw Features | **3,924** columns |
 | Final Features | **50** (after 5-stage selection) |
@@ -396,7 +396,7 @@ Powered by **Louvain community detection** + **PageRank hub scoring**.
 ### 📝 LLM-Narrated Compliance
 Every flagged account receives an auto-generated **Suspicious Transaction Report (STR)** narrative:
 
-- **Primary**: Anthropic Claude generates FIU-IND compliant natural language
+- **Primary**: Groq Llama 3 generates FIU-IND compliant natural language
 - **Fallback**: Rule-based template narrator (zero API dependency)
 - SHAP feature attributions woven into narrative
 - Ready for direct FIU-IND portal submission
@@ -448,7 +448,7 @@ Every component of Nyxara runs on **free, open-source tools**. Total infrastruct
 | **Database** | MongoDB Atlas Free Tier / Local Docker | AWS DocumentDB (~$200/mo) |
 | **Cache** | Redis Docker / Upstash Free Tier | ElastiCache (~$50/mo) |
 | **AI Models** | scikit-learn, XGBoost, PyTorch (CPU) | SageMaker (~$300/mo) |
-| **LLM Narration** | Anthropic free credits / Rule-based fallback | GPT-4 API (~$100/mo) |
+| **LLM Narration** | Groq API / Rule-based fallback | GPT-4 API (~$100/mo) |
 | **Frontend** | React + Vite + Tailwind CSS | Licensed UI frameworks |
 | **Backend** | Node.js + Express | Enterprise API gateways |
 | **Microservices** | FastAPI (Python) | AWS Lambda (~$50/mo) |
@@ -487,13 +487,13 @@ git clone <repo-url> && cd nyxara
 
 **② Place Dataset**
 ```bash
-cp /path/to/compressed_DataSet.xlsx data/
+cp /path/to/dataset.xlsx data/
 ```
 
 **③ Configure Environment**
 ```bash
 cp .env.example .env
-# Optional: Add ANTHROPIC_API_KEY for LLM-narrated alerts
+# Optional: Add GROQ_API_KEY for LLM-narrated alerts
 # Without it, the rule-based fallback narrator works perfectly
 ```
 
@@ -619,7 +619,7 @@ cd frontend && npm install && npm run dev
 
 ```bash
 cd ai-engine
-python training/run_all.py --dataset ../data/compressed_DataSet.xlsx
+python training/run_all.py --dataset ../data/dataset.xlsx
 ```
 
 | Environment | Time | Notes |
@@ -706,7 +706,7 @@ nyxara/
 │   └── main.py                  # FastAPI entry point
 │
 ├── data/                        # Dataset directory
-│   └── compressed_DataSet.xlsx  # 9,082 rows × 3,924 features
+│   └── dataset.xlsx             # 9,082 rows × 3,924 features
 │
 ├── docker-compose.yml           # Full stack orchestration
 ├── .env.example                 # Environment template

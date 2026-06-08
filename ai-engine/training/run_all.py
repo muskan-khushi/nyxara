@@ -29,7 +29,7 @@ ARTIFACTS_DIR = Path(__file__).parent.parent / "models" / "artifacts"
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def run_full_pipeline(dataset_path: str = "../data/compressed_DataSet.xlsx"):
+def run_full_pipeline(dataset_path: str = "../data/dataset.xlsx"):
     start = time.time()
     logger.info("=" * 60)
     logger.info("NYXARA TRAINING PIPELINE — START")
@@ -197,6 +197,6 @@ def run_full_pipeline(dataset_path: str = "../data/compressed_DataSet.xlsx"):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", default="../data/compressed_DataSet.xlsx")
+    parser.add_argument("--dataset", default="../data/dataset.xlsx")
     args = parser.parse_args()
     run_full_pipeline(dataset_path=args.dataset)

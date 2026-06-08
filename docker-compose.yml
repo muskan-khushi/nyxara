@@ -30,8 +30,9 @@ services:
       - ./data:/app/data:ro
       - ./ai-engine/models/artifacts:/app/models/artifacts
     environment:
-      - DATASET_PATH=/app/data/compressed_DataSet.xlsx
+      - DATASET_PATH=/app/data/dataset.xlsx
       - MONGODB_URI=mongodb://mongo:27017/nyxara
+      - GROQ_API_KEY=${GROQ_API_KEY}
     depends_on:
       - mongo
 

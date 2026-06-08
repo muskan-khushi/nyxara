@@ -58,11 +58,11 @@ async def ensure_models_ready():
         "You can also run: python training/run_all.py manually."
     )
 
-    dataset_path = os.getenv("DATASET_PATH", "../data/compressed_DataSet.xlsx")
+    dataset_path = os.getenv("DATASET_PATH", "../data/dataset.xlsx")
     if not Path(dataset_path).exists():
         logger.error(
             f"❌ Dataset not found at {dataset_path}. "
-            "Copy compressed_DataSet.xlsx to the data/ folder and restart. "
+            "Copy dataset.xlsx to the data/ folder and restart. "
             "The API will still serve demo responses in the meantime."
         )
         return
