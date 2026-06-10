@@ -88,7 +88,7 @@ def memory_optimize(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = df[col].astype("int32")
 
     after_mb = df.memory_usage(deep=True).sum() / 1e6
-    logger.info(f"Memory: {before_mb:.1f}MB → {after_mb:.1f}MB (saved {before_mb - after_mb:.1f}MB)")
+    logger.info(f"Memory: {before_mb:.1f}MB -> {after_mb:.1f}MB (saved {before_mb - after_mb:.1f}MB)")
     return df
 
 

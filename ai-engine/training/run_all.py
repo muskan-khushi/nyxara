@@ -14,6 +14,9 @@ import sys
 import time
 from pathlib import Path
 
+# Add parent directory to sys.path to allow running training script directly
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
@@ -29,7 +32,7 @@ ARTIFACTS_DIR = Path(__file__).parent.parent / "models" / "artifacts"
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def run_full_pipeline(dataset_path: str = "../data/dataset.xlsx"):
+def run_full_pipeline(dataset_path: str = "../data/dataset.xlsx", nrows: int | None = None, dry_run: bool = False):
     start = time.time()
     logger.info("=" * 60)
     logger.info("NYXARA TRAINING PIPELINE — START")
@@ -38,7 +41,7 @@ def run_full_pipeline(dataset_path: str = "../data/dataset.xlsx"):
     # ── Step 1: Load dataset ───────────────────────────────────
     logger.info("\n[1/12] Loading dataset ...")
     from preprocessing.loader import load_dataset, check_imbalance, quick_eda
-    X, y = load_dataset(dataset_path)
+    X, y = load_dataset(dataset_path, nrows=nrows)
     fraud_rate = check_imbalance(y)
     eda = quick_eda(X, y)
 
@@ -79,17 +82,18 @@ def run_full_pipeline(dataset_path: str = "../data/dataset.xlsx"):
 
     # ── Step 7: Train ensemble ─────────────────────────────────
     logger.info("\n[7/12] Training ensemble models ...")
+    n_est = 5 if dry_run else 500
 
     from models.ensemble.xgboost_model import train_xgboost
-    xgb_model = train_xgboost(X_train_bal, y_train_bal, X_val, y_val, scale_pos_weight=spw)
+    xgb_model = train_xgboost(X_train_bal, y_train_bal, X_val, y_val, scale_pos_weight=spw, n_estimators=n_est)
     xgb_val_probs = xgb_model.predict_proba(X_val)[:, 1]
 
     from models.ensemble.lightgbm_model import train_lightgbm
-    lgbm_model = train_lightgbm(X_train_bal, y_train_bal, X_val, y_val, scale_pos_weight=spw)
+    lgbm_model = train_lightgbm(X_train_bal, y_train_bal, X_val, y_val, scale_pos_weight=spw, n_estimators=n_est)
     lgbm_val_probs = lgbm_model.predict_proba(X_val)[:, 1]
 
     from models.ensemble.catboost_model import train_catboost
-    cat_model = train_catboost(X_train_bal, y_train_bal, X_val, y_val, scale_pos_weight=spw)
+    cat_model = train_catboost(X_train_bal, y_train_bal, X_val, y_val, scale_pos_weight=spw, iterations=n_est)
     cat_val_probs = cat_model.predict_proba(X_val)[:, 1]
 
     # ── Step 8: Build graph + train GNN ───────────────────────
@@ -98,8 +102,8 @@ def run_full_pipeline(dataset_path: str = "../data/dataset.xlsx"):
 
     all_edges = (
         build_knn_edges(X_scaled.select_dtypes(include=[np.number]).values, k=8)
-        + build_branch_edges(X_scaled)
-        + build_linked_edges(X_scaled)
+        + build_branch_edges(X_encoded)
+        + build_linked_edges(X_encoded)
     )
 
     n = len(X_scaled)
@@ -113,7 +117,8 @@ def run_full_pipeline(dataset_path: str = "../data/dataset.xlsx"):
     import torch
     from models.gnn.train_gnn import train_gnn, get_gnn_scores
     pyg_data  = to_pyg_data(X_scaled, y, all_edges, train_mask, val_mask, test_mask)
-    gnn_model = train_gnn(pyg_data)
+    gnn_epochs = 5 if dry_run else 450
+    gnn_model = train_gnn(pyg_data, epochs=gnn_epochs)
     gnn_all_scores = get_gnn_scores(gnn_model, pyg_data)
     gnn_val_scores = gnn_all_scores[val_mask]
 
@@ -128,7 +133,8 @@ def run_full_pipeline(dataset_path: str = "../data/dataset.xlsx"):
     from models.anomaly.vae import train_vae
     legit_mask = y_train_bal == 0
     X_legit    = X_train_bal[legit_mask].select_dtypes(include=[np.number]).values
-    vae_model  = train_vae(X_legit.astype(np.float32))
+    vae_epochs = 5 if dry_run else 100
+    vae_model  = train_vae(X_legit.astype(np.float32), epochs=vae_epochs)
 
     # ── Step 10: Ring detection ────────────────────────────────
     logger.info("\n[10/12] Detecting mule rings ...")
@@ -198,5 +204,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="../data/dataset.xlsx")
+    parser.add_argument("--nrows", type=int, default=None)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    run_full_pipeline(dataset_path=args.dataset)
+    run_full_pipeline(dataset_path=args.dataset, nrows=args.nrows, dry_run=args.dry_run)

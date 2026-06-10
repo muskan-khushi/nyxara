@@ -24,13 +24,14 @@ def train_xgboost(
     X_val: pd.DataFrame,
     y_val: pd.Series,
     scale_pos_weight: float = 10.0,
+    n_estimators: int = 500,
 ) -> xgb.XGBClassifier:
     """
     Train XGBoost with early stopping.
     Returns fitted model.
     """
     model = xgb.XGBClassifier(
-        n_estimators=500,
+        n_estimators=n_estimators,
         max_depth=6,
         learning_rate=0.05,
         subsample=0.8,

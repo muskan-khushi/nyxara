@@ -16,17 +16,18 @@ CATEGORICAL_COLS = ["F3891", "F3889"]
 
 def fit_encoders(X: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """
-    Fit LabelEncoders on categorical columns.
+    Fit LabelEncoders on ALL object/string columns.
     Returns encoded DataFrame and encoder mapping dict.
     """
     encoders = {}
     X = X.copy()
 
-    for col in CATEGORICAL_COLS:
-        if col not in X.columns:
-            continue
+    # Encode all object columns, not just the two hardcoded ones
+    all_cat_cols = X.select_dtypes(include=["object"]).columns.tolist()
+
+    for col in all_cat_cols:
         le = LabelEncoder()
-        X[col] = X[col].astype(str).fillna("UNKNOWN")
+        X[col] = X[col].fillna("UNKNOWN").astype(str)
         X[col] = le.fit_transform(X[col])
         encoders[col] = {
             "classes": le.classes_.tolist(),
@@ -52,6 +53,14 @@ def apply_encoders(X: pd.DataFrame) -> pd.DataFrame:
             continue
         classes = meta["classes"]
         class_map = {c: i for i, c in enumerate(classes)}
+        # Unseen categories (like 'Savings' if not in training) map to -1
         X[col] = X[col].astype(str).map(class_map).fillna(-1).astype(int)
+
+    # Also encode any remaining object columns not in saved encoders
+    remaining_obj = X.select_dtypes(include=["object"]).columns.tolist()
+    for col in remaining_obj:
+        logger.warning(f"Column {col} has object dtype at inference but no saved encoder — label encoding on the fly")
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col].astype(str).fillna("UNKNOWN"))
 
     return X

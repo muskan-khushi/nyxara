@@ -3,7 +3,7 @@ import logging
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from api.schemas import AccountFeatures, ScoreResponse
-from inference.cache import get_cached_score, is_known_account
+from inference.cache import get_cached_score, set_cached_score, is_known_account
 from inference.scorer import fuse_scores
 from inference.alert_narrator import generate_alert
 from models.ensemble.xgboost_model import top_shap_factors
@@ -115,6 +115,7 @@ async def score_account(payload: AccountFeatures):
             override_applied=result.override_applied,
         )
 
+        set_cached_score(account_id, response)
         return response
 
     except Exception as e:

@@ -74,8 +74,8 @@ class VAE(nn.Module):
 
 def vae_loss(x: torch.Tensor, x_hat: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     """ELBO loss: reconstruction + KL divergence."""
-    recon = F.mse_loss(x_hat, x, reduction="sum")
-    kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    recon = F.mse_loss(x_hat, x, reduction="mean")
+    kl = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
     return recon + 0.001 * kl  # β = 0.001 to balance terms
 
 
@@ -90,6 +90,10 @@ def train_vae(
     Train VAE on legitimate account features only.
     Computes 95th percentile threshold for anomaly detection.
     """
+    # ── Sanitize input: ADASYN on scaled data can produce NaN/Inf ──
+    X_legit = np.nan_to_num(X_legit, nan=0.0, posinf=0.0, neginf=0.0)
+    X_legit = np.clip(X_legit, -10.0, 10.0)  # Clamp extreme outliers
+
     input_dim = X_legit.shape[1]
     model = VAE(input_dim=input_dim, hidden_dim=128, latent_dim=32)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -107,17 +111,26 @@ def train_vae(
             optimizer.zero_grad()
             x_hat, mu, logvar = model(batch)
             loss = vae_loss(batch, x_hat, mu, logvar)
+            if torch.isnan(loss) or torch.isinf(loss):
+                logger.warning(f"VAE Epoch {epoch}: NaN/Inf loss detected, skipping batch")
+                continue
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             total_loss += loss.item()
 
         if epoch % 20 == 0:
-            logger.info(f"VAE Epoch {epoch}/{epochs} | Loss: {total_loss / len(loader):.4f}")
+            logger.info(f"VAE Epoch {epoch}/{epochs} | Loss: {total_loss / max(len(loader), 1):.4f}")
 
     # Compute anomaly threshold on training data
     model.eval()
     recon_errors = model.reconstruction_error(X_tensor).numpy()
+    # Guard against NaN in reconstruction errors
+    recon_errors = np.nan_to_num(recon_errors, nan=0.0, posinf=0.0, neginf=0.0)
     threshold = float(np.percentile(recon_errors, percentile))
+    if np.isnan(threshold) or threshold <= 0:
+        threshold = 1.0  # Safe fallback
+        logger.warning(f"VAE threshold was NaN or zero, using fallback: {threshold}")
     logger.info(f"VAE threshold (P{percentile:.0f}): {threshold:.6f}")
 
     # Save

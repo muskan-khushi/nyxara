@@ -69,7 +69,8 @@ def train_gnn(
         if epoch % 5 == 0 or epoch == epochs:
             model.eval()
             with torch.no_grad():
-                val_probs = F.softmax(out[data.val_mask], dim=1)[:, 1].numpy()
+                val_out = model(data.x, data.edge_index)
+                val_probs = F.softmax(val_out[data.val_mask], dim=1)[:, 1].numpy()
                 val_labels = data.y[data.val_mask].numpy()
 
             try:

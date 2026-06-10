@@ -37,3 +37,5 @@ frontend/dist/
 
 # Redis dump
 dump.rdb
+
+venv

@@ -35,15 +35,24 @@ HIGH_RISK_OCCUPATIONS_FOR_INTL = {"student", "housewife", "retired"}
 
 
 def add_composite_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add all 12 composite features to the DataFrame.
-    Input df must have already been encoded (F3891 as string still OK here).
-    Returns df with additional columns.
-    """
+    """..."""
     df = df.copy()
 
+    # Deduplicate columns (can arise from concat in feature selection pipeline)
+    df = df.loc[:, ~df.columns.duplicated()]
+
     # ── Helpers ───────────────────────────────────────────────
-    occ = df["F3891"].str.lower().str.strip() if "F3891" in df.columns else pd.Series("others", index=df.index)
+    if "F3891" in df.columns:
+        _f3891 = df["F3891"]
+        # Guard against post-encoding int dtype
+        if pd.api.types.is_object_dtype(_f3891):
+            occ = _f3891.str.lower().str.strip().fillna("others")
+        else:
+            _idx_map = {0: "agriculture", 1: "housewife", 2: "others",
+                        3: "retired", 4: "salaried", 5: "selfemployed", 6: "student"}
+            occ = _f3891.map(_idx_map).fillna("others")
+    else:
+        occ = pd.Series("others", index=df.index)
 
     def safe(col, default=0.0):
         return df[col] if col in df.columns else pd.Series(default, index=df.index)

@@ -1,0 +1,18 @@
+{
+  "auc": 0.9629,
+  "f1": 0.1176,
+  "confusion_matrix": [
+    [
+      1187,
+      164
+    ],
+    [
+      1,
+      11
+    ]
+  ],
+  "optimal_threshold": 0.5,
+  "n_train": 8455,
+  "n_test": 1363,
+  "fraud_rate": 0.0089
+}

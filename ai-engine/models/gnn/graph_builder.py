@@ -39,23 +39,41 @@ def build_knn_edges(X_numeric: np.ndarray, k: int = 8, distance_threshold: float
     return edges
 
 
-def build_branch_edges(df: pd.DataFrame, max_group_size: int = 50) -> list[tuple]:
+def build_branch_edges(df: pd.DataFrame, max_group_size: int = 2000, max_edges_per_group: int = 500) -> list[tuple]:
     """
     Connect accounts in the same branch (F3889).
-    Only for groups < max_group_size to avoid spurious hubs.
+    For groups > max_edges_per_group pairs, sample random edges to avoid O(n^2).
+    Groups > max_group_size are skipped entirely.
     """
     if "F3889" not in df.columns:
         return []
 
+    idx_to_pos = {idx: pos for pos, idx in enumerate(df.index)}
     edges = []
     for branch, group in df.groupby("F3889"):
         if len(group) >= max_group_size:
             continue
         idxs = group.index.tolist()
-        for i in range(len(idxs)):
-            for j in range(i + 1, len(idxs)):
-                edges.append((idxs[i], idxs[j]))
-                edges.append((idxs[j], idxs[i]))
+        n_pairs = len(idxs) * (len(idxs) - 1) // 2
+
+        if n_pairs <= max_edges_per_group:
+            # Small group — connect all pairs
+            for i in range(len(idxs)):
+                for j in range(i + 1, len(idxs)):
+                    pos_i = idx_to_pos[idxs[i]]
+                    pos_j = idx_to_pos[idxs[j]]
+                    edges.append((pos_i, pos_j))
+                    edges.append((pos_j, pos_i))
+        else:
+            # Large group — sample random edges
+            import random
+            rng = random.Random(42)
+            for _ in range(max_edges_per_group):
+                i, j = rng.sample(range(len(idxs)), 2)
+                pos_i = idx_to_pos[idxs[i]]
+                pos_j = idx_to_pos[idxs[j]]
+                edges.append((pos_i, pos_j))
+                edges.append((pos_j, pos_i))
 
     logger.info(f"Branch edges: {len(edges)} total")
     return edges
@@ -69,12 +87,22 @@ def build_linked_edges(df: pd.DataFrame, link_threshold: int = 5) -> list[tuple]
     if "F1692" not in df.columns:
         return []
 
+    idx_to_pos = {idx: pos for pos, idx in enumerate(df.index)}
     high_link = df[df["F1692"] > link_threshold].index.tolist()
+    high_link_positions = [idx_to_pos[idx] for idx in high_link if idx in idx_to_pos]
+
+    n_high = len(high_link_positions)
+    if n_high > 2000:
+        logger.warning(f"Too many high-link accounts ({n_high}). Bounding edge construction to prevent O(n^2) blowup.")
+        high_link_positions = high_link_positions[:2000]
+        n_high = 2000
+
     edges = []
-    for i in range(len(high_link)):
-        for j in range(i + 1, len(high_link)):
-            edges.append((high_link[i], high_link[j]))
-            edges.append((high_link[j], high_link[i]))
+    for i in range(n_high):
+        for j in range(i + 1, n_high):
+            u, v = high_link_positions[i], high_link_positions[j]
+            edges.append((u, v))
+            edges.append((v, u))
 
     logger.info(f"Linked account edges: {len(edges)} total")
     return edges
@@ -97,10 +125,17 @@ def to_pyg_data(
     node_features = torch.FloatTensor(X_numeric.values)
     labels = torch.LongTensor(y.values)
 
-    # Deduplicate and build edge index
-    unique_edges = list(set(all_edges))
-    if unique_edges:
-        edge_index = torch.LongTensor(unique_edges).t().contiguous()
+    # Deduplicate and build edge index defensively
+    num_nodes = len(X)
+    valid_edges = []
+    for u, v in set(all_edges):
+        if 0 <= u < num_nodes and 0 <= v < num_nodes:
+            valid_edges.append((u, v))
+        else:
+            logger.warning(f"Edge index out of bounds ignored: ({u}, {v}) for num_nodes={num_nodes}")
+
+    if valid_edges:
+        edge_index = torch.LongTensor(valid_edges).t().contiguous()
     else:
         edge_index = torch.zeros((2, 0), dtype=torch.long)
 

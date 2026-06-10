@@ -21,8 +21,9 @@ shap==0.45.0
 # ─── ML — Graph ──────────────────────────────────────────────
 torch==2.3.1              # CPU build — no CUDA needed
 torch-geometric==2.5.3
-# Install PyG dependencies AFTER torch:
-# pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.3.1+cpu.html
+--find-links https://data.pyg.org/whl/torch-2.3.1+cpu.html
+torch-scatter
+torch-sparse
 
 # ─── Community detection ─────────────────────────────────────
 networkx==3.3

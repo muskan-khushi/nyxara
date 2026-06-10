@@ -44,7 +44,7 @@ def variance_filter(X: pd.DataFrame, threshold: float = 0.01) -> pd.DataFrame:
     kept_numeric = [c for c, keep in zip(numeric_cols, selector.get_support()) if keep]
 
     result = pd.concat([X[kept_numeric], X[cat_cols]], axis=1)
-    logger.info(f"Stage 1 Variance: {len(X.columns)} → {len(result.columns)} columns")
+    logger.info(f"Stage 1 Variance: {len(X.columns)} -> {len(result.columns)} columns")
     return result
 
 
@@ -141,7 +141,7 @@ def correlation_dedup(X: pd.DataFrame, threshold: float = 0.95) -> pd.DataFrame:
     to_drop = [c for c in to_drop if c not in BANK_KEY_FEATURES]
 
     X = X.drop(columns=to_drop)
-    logger.info(f"Stage 4 Correlation dedup: dropped {len(to_drop)} correlated features → {X.shape[1]} remaining")
+    logger.info(f"Stage 4 Correlation dedup: dropped {len(to_drop)} correlated features -> {X.shape[1]} remaining")
     return X
 
 

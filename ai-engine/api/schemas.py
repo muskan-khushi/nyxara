@@ -37,7 +37,7 @@ class AccountFeatures(BaseModel):
 class ShapFactor(BaseModel):
     feature: str
     shap_value: float
-    raw_value: float
+    raw_value: Optional[float] = None
     direction: str  # "fraud_risk" | "safe_signal"
 
 

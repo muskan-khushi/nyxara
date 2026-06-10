@@ -12,21 +12,17 @@ import lightgbm as lgb
 logger = logging.getLogger("nyxara.lightgbm")
 ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
 
-CATEGORICAL_COLS = ["F3891", "F3889"]
-
-
 def train_lightgbm(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     X_val: pd.DataFrame,
     y_val: pd.Series,
     scale_pos_weight: float = 10.0,
+    n_estimators: int = 500,
 ) -> lgb.LGBMClassifier:
 
-    cat_features = [c for c in CATEGORICAL_COLS if c in X_train.columns]
-
     model = lgb.LGBMClassifier(
-        n_estimators=500,
+        n_estimators=n_estimators,
         max_depth=6,
         learning_rate=0.05,
         num_leaves=63,
@@ -45,7 +41,6 @@ def train_lightgbm(
         eval_set=[(X_val, y_val)],
         eval_metric="auc",
         callbacks=[lgb.early_stopping(30), lgb.log_evaluation(50)],
-        categorical_feature=cat_features if cat_features else "auto",
     )
 
     val_auc = roc_auc_score(y_val, model.predict_proba(X_val)[:, 1])
