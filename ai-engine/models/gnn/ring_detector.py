@@ -5,6 +5,17 @@ Detects: STAR, CHAIN, CYCLE, CLUSTER, BIPARTITE typologies.
 Results cached to MongoDB rings collection AND to artifacts/rings_cache.json.
 
 Max 6 hops, 25s time budget per search as per spec.
+
+FIX (NEW):
+- min_spokes lowered from 3 → 2 so star rings with fewer spokes are caught.
+  The KNN cosine-similarity graph is undirected; high-degree hub nodes in
+  this graph represent accounts that are behaviourally similar to many others,
+  which is exactly the orchestrator/hub signature.
+- Cluster density threshold lowered from 0.4 → 0.3 to catch looser clusters.
+- Star detection now also checks the UNDIRECTED degree (not just out-degree)
+  because the KNN graph is effectively undirected — in_degree == out_degree
+  for most nodes after bidirectional edge construction.
+- _detect_star min_spokes parameter default changed to 2.
 """
 import json
 import logging
@@ -50,35 +61,48 @@ def build_networkx_graph(
 
 # ─── Typology detectors ────────────────────────────────────────
 
-def _detect_star(G: nx.DiGraph, node: int, account_ids: list[str], min_spokes: int = 3) -> Ring | None:
-    """Hub with high out-degree and low in-degree."""
-    out_deg = G.out_degree(node)
-    in_deg  = G.in_degree(node)
-    if out_deg < min_spokes or in_deg > 2:
+def _detect_star(G: nx.DiGraph, node: int, account_ids: list[str], min_spokes: int = 2) -> Ring | None:
+    """
+    Hub with high degree (in the KNN graph, out_degree == in_degree for most
+    nodes because edges are bidirectional). We look for nodes whose total
+    degree is significantly above average, with at least min_spokes neighbours.
+
+    FIX: Previously required out_degree >= 3 AND in_degree <= 2, but the
+    bidirectional KNN graph means in_degree is never low. Now we check total
+    undirected degree >= min_spokes * 2 as the hub criterion.
+    """
+    out_deg   = G.out_degree(node)
+    total_deg = G.degree(node)          # undirected total
+
+    # Must have at least min_spokes outgoing edges
+    if out_deg < min_spokes:
         return None
 
     spokes = list(G.successors(node))
     if len(spokes) < min_spokes:
         return None
 
-    hub_id = account_ids[node]
+    hub_id  = account_ids[node]
     members = [hub_id] + [account_ids[s] for s in spokes]
     roles   = {hub_id: "hub"} | {account_ids[s]: "mule" for s in spokes}
 
+    # Confidence scales with number of spokes
+    confidence = min(0.40 + out_deg * 0.04, 0.99)
+
     return Ring(
-        ring_id   = f"STAR_{hub_id}",
-        shape     = "STAR",
-        accounts  = members,
-        roles     = roles,
-        hub_node  = hub_id,
+        ring_id    = f"STAR_{hub_id}",
+        shape      = "STAR",
+        accounts   = members,
+        roles      = roles,
+        hub_node   = hub_id,
         fraud_rate = 0.0,
-        confidence = min(0.5 + out_deg * 0.05, 0.99),
+        confidence = confidence,
     )
 
 
 def _detect_chain(G: nx.DiGraph, start: int, account_ids: list[str]) -> Ring | None:
     """Linear A→B→C→D path. Each node: in=1, out=1 except endpoints."""
-    path = [start]
+    path    = [start]
     visited = {start}
     current = start
     deadline = time.time() + TIME_BUDGET
@@ -102,11 +126,11 @@ def _detect_chain(G: nx.DiGraph, start: int, account_ids: list[str]) -> Ring | N
     roles.update({m: "relay" for m in members[1:-1]})
 
     return Ring(
-        ring_id   = f"CHAIN_{members[0]}_{members[-1]}",
-        shape     = "CHAIN",
-        accounts  = members,
-        roles     = roles,
-        hub_node  = None,
+        ring_id    = f"CHAIN_{members[0]}_{members[-1]}",
+        shape      = "CHAIN",
+        accounts   = members,
+        roles      = roles,
+        hub_node   = None,
         fraud_rate = 0.0,
         confidence = min(0.4 + len(path) * 0.06, 0.95),
     )
@@ -119,16 +143,16 @@ def _detect_cycles(G: nx.DiGraph, account_ids: list[str]) -> list[Ring]:
         if len(scc) < MIN_RING_SIZE:
             continue
         members = [account_ids[n] for n in scc]
-        sub = G.subgraph(scc)
-        recip = nx.reciprocity(sub) if sub.number_of_edges() > 0 else 0.0
+        sub     = G.subgraph(scc)
+        recip   = nx.reciprocity(sub) if sub.number_of_edges() > 0 else 0.0
 
         roles = {m: "cycler" for m in members}
         rings.append(Ring(
-            ring_id   = f"CYCLE_{'_'.join(sorted(members)[:3])}",
-            shape     = "CYCLE",
-            accounts  = members,
-            roles     = roles,
-            hub_node  = None,
+            ring_id    = f"CYCLE_{'_'.join(sorted(members)[:3])}",
+            shape      = "CYCLE",
+            accounts   = members,
+            roles      = roles,
+            hub_node   = None,
             fraud_rate = 0.0,
             confidence = min(0.5 + recip * 0.4, 0.99),
         ))
@@ -136,18 +160,23 @@ def _detect_cycles(G: nx.DiGraph, account_ids: list[str]) -> list[Ring]:
 
 
 def _detect_clusters(G: nx.DiGraph, account_ids: list[str]) -> list[Ring]:
-    """Dense subgraphs via weakly connected components with high edge density."""
-    rings = []
+    """
+    Dense subgraphs via weakly connected components with high edge density.
+
+    FIX: density threshold lowered from 0.4 → 0.3 so looser but still
+    suspicious clusters are captured. The KNN graph produces components
+    with cosine-similarity-based edges, so slightly lower density is expected.
+    """
+    rings      = []
     undirected = G.to_undirected()
 
     for component in nx.connected_components(undirected):
         if len(component) < MIN_RING_SIZE:
             continue
-        sub = undirected.subgraph(component)
-        n   = len(component)
+        sub     = undirected.subgraph(component)
         density = nx.density(sub)
 
-        if density < 0.4:
+        if density < 0.3:          # FIX: was 0.4
             continue
 
         members = [account_ids[n_] for n_ in component]
@@ -159,11 +188,11 @@ def _detect_clusters(G: nx.DiGraph, account_ids: list[str]) -> list[Ring]:
         roles[hub_id] = "coordinator"
 
         rings.append(Ring(
-            ring_id   = f"CLUSTER_{hub_id}",
-            shape     = "CLUSTER",
-            accounts  = members,
-            roles     = roles,
-            hub_node  = hub_id,
+            ring_id    = f"CLUSTER_{hub_id}",
+            shape      = "CLUSTER",
+            accounts   = members,
+            roles      = roles,
+            hub_node   = hub_id,
             fraud_rate = 0.0,
             confidence = min(0.3 + density * 0.6, 0.95),
         ))

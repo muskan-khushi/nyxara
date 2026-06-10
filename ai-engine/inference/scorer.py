@@ -6,27 +6,86 @@ Implements the weighted formula from the Nyxara guide (Section 07).
 finalRisk = 0.35×gnn + 0.25×ensemble + 0.20×vae + 0.12×bei + 0.08×graph_features
 Decision thresholds: <0.40 APPROVE · 0.40-0.70 REVIEW · 0.70-0.85 FLAG · ≥0.85 BLOCK
 Override rule: ring_membership AND community_fraud_rate > 0.60 → force minimum REVIEW
+
+FIX (NEW): Decision thresholds are now derived from the optimal_threshold saved
+in eval_report.json, rather than always using hardcoded .env values.
+For extreme imbalance (0.89% fraud rate) the optimal threshold is much lower
+than 0.5 — using it scales all four bands proportionally so APPROVE/REVIEW/FLAG/BLOCK
+map correctly to the actual score distribution. Falls back gracefully to .env
+values if eval_report.json does not exist yet (before first training run).
 """
+import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger("nyxara.scorer")
 
-# ── Configurable weights (loaded from .env with fallback) ─────
+ARTIFACTS_DIR = Path(__file__).parent.parent / "models" / "artifacts"
+
+# ── Configurable base weights (from .env, with fallback) ──────
 W_GNN      = float(os.getenv("WEIGHT_GNN",      "0.35"))
 W_ENSEMBLE = float(os.getenv("WEIGHT_ENSEMBLE",  "0.25"))
 W_VAE      = float(os.getenv("WEIGHT_VAE",       "0.20"))
 W_BEI      = float(os.getenv("WEIGHT_BEI",       "0.12"))
 W_GRAPH    = float(os.getenv("WEIGHT_GRAPH",      "0.08"))
 
-# Decision thresholds
-T_APPROVE = float(os.getenv("RISK_THRESHOLD_APPROVE", "0.40"))
-T_REVIEW  = float(os.getenv("RISK_THRESHOLD_REVIEW",  "0.70"))
-T_FLAG    = float(os.getenv("RISK_THRESHOLD_FLAG",     "0.85"))
-
-# Override threshold: if ring member AND community fraud rate > this → force REVIEW
+# Override threshold: ring member AND community fraud rate > this → force REVIEW
 RING_OVERRIDE_COMMUNITY_RATE = 0.60
+
+
+def _load_decision_thresholds() -> tuple[float, float, float]:
+    """
+    Load decision thresholds derived from the optimal threshold.
+
+    If eval_report.json exists and has optimal_threshold, we scale the four
+    decision bands proportionally around it:
+      - APPROVE: below  optimal * 0.60
+      - REVIEW:  optimal * 0.60  → optimal * 1.10
+      - FLAG:    optimal * 1.10  → optimal * 1.50
+      - BLOCK:   above  optimal * 1.50
+
+    These multipliers ensure the bands always make sense relative to the
+    model's actual calibration, regardless of how low the optimal threshold is.
+
+    Falls back to .env values (or hardcoded defaults) if no report exists.
+    """
+    env_approve = float(os.getenv("RISK_THRESHOLD_APPROVE", "0.40"))
+    env_review  = float(os.getenv("RISK_THRESHOLD_REVIEW",  "0.70"))
+    env_flag    = float(os.getenv("RISK_THRESHOLD_FLAG",     "0.85"))
+
+    report_path = ARTIFACTS_DIR / "eval_report.json"
+    if not report_path.exists():
+        logger.debug("eval_report.json not found — using .env thresholds")
+        return env_approve, env_review, env_flag
+
+    try:
+        with open(report_path) as f:
+            report = json.load(f)
+        opt = float(report.get("optimal_threshold", 0.0))
+        if opt <= 0.0 or opt >= 1.0:
+            # Sentinel / invalid value — fall back
+            return env_approve, env_review, env_flag
+
+        t_approve = round(max(0.01, min(opt * 0.60, 0.60)), 4)
+        t_review  = round(max(t_approve + 0.01, min(opt * 1.10, 0.80)), 4)
+        t_flag    = round(max(t_review  + 0.01, min(opt * 1.50, 0.95)), 4)
+
+        logger.info(
+            f"Decision thresholds from optimal_threshold={opt:.4f}: "
+            f"APPROVE<{t_approve} | REVIEW<{t_review} | FLAG<{t_flag} | BLOCK>={t_flag}"
+        )
+        return t_approve, t_review, t_flag
+
+    except Exception as e:
+        logger.warning(f"Could not load optimal_threshold from eval_report.json ({e}) — using .env thresholds")
+        return env_approve, env_review, env_flag
+
+
+# Load thresholds once at module import time.
+# They are re-read every process restart (i.e. after retraining, restart uvicorn).
+T_APPROVE, T_REVIEW, T_FLAG = _load_decision_thresholds()
 
 
 @dataclass

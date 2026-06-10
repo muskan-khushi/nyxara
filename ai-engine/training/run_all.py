@@ -6,7 +6,7 @@ Usage:
     cd ai-engine
     python training/run_all.py
 
-FIXES:
+FIXES applied on top of original:
 1. DataFrame index reset after train/test split — sklearn returns positional
    integer indices; using them as boolean masks on the original DataFrame caused
    wrong or out-of-bounds assignments.
@@ -17,6 +17,13 @@ FIXES:
 4. Graph builder receives RESET-index DataFrame to guarantee 0-based integer
    node indices match edge tuples.
 5. model_meta.json now written with correct n_features count.
+6. FIX (NEW): optimal threshold computed via precision_recall_curve on
+   validation set instead of hardcoded 0.5 — this is the critical fix for
+   F1=0.13 → much higher F1 on extreme imbalance (0.89% fraud rate).
+7. FIX (NEW): precision and recall added to eval_report.json so Metrics page
+   works correctly.
+8. FIX (NEW): community_fraud_rate and ring_membership properly fetched
+   and stored during scoring so scorer.py override rule fires correctly.
 """
 import json
 import logging
@@ -28,7 +35,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
+from sklearn.metrics import (
+    roc_auc_score,
+    f1_score,
+    confusion_matrix,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,7 +69,7 @@ def run_full_pipeline(
     logger.info("\n[1/12] Loading dataset ...")
     from preprocessing.loader import load_dataset, check_imbalance, quick_eda
     X, y = load_dataset(dataset_path, nrows=nrows)
-    # FIX: reset index so all downstream iloc/positional ops are consistent
+    # reset index so all downstream iloc/positional ops are consistent
     X = X.reset_index(drop=True)
     y = y.reset_index(drop=True)
     fraud_rate = check_imbalance(y)
@@ -100,7 +114,7 @@ def run_full_pipeline(
     X_train, X_val, y_train, y_val = train_test_split(
         X_temp, y_temp, test_size=0.15, random_state=42, stratify=y_temp
     )
-    # FIX: reset index on all splits so positional masking works correctly
+    # reset index on all splits so positional masking works correctly
     X_train = X_train.reset_index(drop=True)
     X_val   = X_val.reset_index(drop=True)
     X_test  = X_test.reset_index(drop=True)
@@ -149,10 +163,8 @@ def run_full_pipeline(
         build_knn_edges, build_branch_edges, build_linked_edges, to_pyg_data,
     )
 
-    # FIX: graph builder needs 0-based positional index — use X_scaled which
-    # has already been reset. The edge tuples use row-position integers.
-    X_graph = X_scaled  # already reset_index above
-    X_graph_enc = X_encoded.reset_index(drop=True)  # for branch/linked edges
+    X_graph     = X_scaled          # already reset_index above
+    X_graph_enc = X_encoded.reset_index(drop=True)
 
     all_edges = (
         build_knn_edges(X_graph.select_dtypes(include=[np.number]).values, k=8)
@@ -161,16 +173,8 @@ def run_full_pipeline(
     )
 
     n = len(X_graph)
-    # FIX: build masks using positional integer index of each split, not
-    # the pandas index (which may be non-contiguous after split).
-    train_idx = X_train.index.tolist()   # these are reset so 0..len-1
-    val_idx   = X_val.index.tolist()
-    test_idx  = X_test.index.tolist()
 
-    # Map back to positions in full X_scaled
-    # After our reset_index calls on X_scaled the row order is preserved.
-    # We need the original positions of train/val/test rows in X_scaled.
-    # The safest approach: rebuild masks from sklearn split on reset arrays.
+    # Rebuild masks using positional integer index of full X_scaled
     all_idx = np.arange(n)
     _, test_pos = train_test_split(all_idx, test_size=0.15, random_state=42,
                                    stratify=y.values)
@@ -243,16 +247,63 @@ def run_full_pipeline(
     meta_test_X    = build_meta_features(xgb_test, lgbm_test, cat_test, gnn_test)
     ensemble_probs = meta_model.predict_proba(meta_test_X)[:, 1]
 
+    # ── FIX: Find optimal threshold on VALIDATION set ─────────
+    # Default 0.5 is wrong for 0.89% fraud rate — precision_recall_curve
+    # finds the threshold that maximises F1 on the held-out validation set.
+    logger.info("\n[12a] Finding optimal decision threshold on validation set ...")
+    val_meta_X     = build_meta_features(xgb_val_probs, lgbm_val_probs, cat_val_probs, gnn_val_scores)
+    val_ens_probs  = meta_model.predict_proba(val_meta_X)[:, 1]
+
+    val_precision, val_recall, val_thresholds = precision_recall_curve(
+        y_val.values, val_ens_probs
+    )
+    # F1 at each threshold (avoid division by zero)
+    val_f1_scores = (
+        2 * val_precision * val_recall
+        / np.where((val_precision + val_recall) == 0, 1e-9, (val_precision + val_recall))
+    )
+    # precision_recall_curve returns len(thresholds) == len(precision) - 1
+    # so we take the slice [:-1] of precision/recall to align with thresholds
+    val_f1_aligned = val_f1_scores[:-1]  # drop the last sentinel point
+
+    if len(val_f1_aligned) > 0:
+        best_idx          = int(np.argmax(val_f1_aligned))
+        optimal_threshold = float(val_thresholds[best_idx])
+        logger.info(
+            f"Optimal threshold: {optimal_threshold:.4f} "
+            f"(val precision={val_precision[best_idx]:.3f}, "
+            f"recall={val_recall[best_idx]:.3f}, "
+            f"F1={val_f1_aligned[best_idx]:.3f})"
+        )
+    else:
+        optimal_threshold = 0.5
+        logger.warning("Could not compute optimal threshold — falling back to 0.5")
+
+    # ── Evaluate test set with optimal threshold ──────────────
     auc   = roc_auc_score(y_test, ensemble_probs)
-    preds = (ensemble_probs >= 0.5).astype(int)
+    preds = (ensemble_probs >= optimal_threshold).astype(int)
     f1    = f1_score(y_test, preds, zero_division=0)
+    prec  = precision_score(y_test, preds, zero_division=0)
+    rec   = recall_score(y_test, preds, zero_division=0)
     cm    = confusion_matrix(y_test, preds).tolist()
+
+    logger.info(
+        f"Test results with optimal threshold {optimal_threshold:.4f}: "
+        f"AUC={auc:.4f} | F1={f1:.4f} | Precision={prec:.4f} | Recall={rec:.4f}"
+    )
+
+    # Also log what 0.5 would give, for comparison
+    preds_05 = (ensemble_probs >= 0.5).astype(int)
+    f1_05    = f1_score(y_test, preds_05, zero_division=0)
+    logger.info(f"For reference — F1 at threshold 0.5: {f1_05:.4f}")
 
     report = {
         "auc":               round(auc, 4),
         "f1":                round(f1, 4),
+        "precision":         round(prec, 4),
+        "recall":            round(rec, 4),
+        "optimal_threshold": round(optimal_threshold, 6),
         "confusion_matrix":  cm,
-        "optimal_threshold": 0.5,
         "n_train":           len(X_train_bal),
         "n_test":            len(X_test),
         "fraud_rate":        round(fraud_rate, 4),
@@ -271,7 +322,8 @@ def run_full_pipeline(
     elapsed = (time.time() - start) / 60
     logger.info(f"\n{'='*60}")
     logger.info(f"TRAINING COMPLETE in {elapsed:.1f} minutes")
-    logger.info(f"Test AUC: {auc:.4f} | F1: {f1:.4f}")
+    logger.info(f"Test AUC: {auc:.4f} | F1: {f1:.4f} | Precision: {prec:.4f} | Recall: {rec:.4f}")
+    logger.info(f"Optimal threshold: {optimal_threshold:.4f}")
     logger.info(f"Rings detected: {len(rings)}")
     logger.info(f"Communities: {community_data.get('n_communities', '?')}")
     logger.info(f"{'='*60}\n")

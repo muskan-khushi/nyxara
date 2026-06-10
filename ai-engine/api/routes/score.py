@@ -1,6 +1,6 @@
 """api/routes/score.py — POST /v1/score
 
-FIXES:
+FIXES from original:
 1. Preprocessing order at inference must mirror training:
    composite_features → encode → scale (not encode → scale → composite).
 2. Feature alignment now uses the saved selected_features list, adding 0.0
@@ -9,8 +9,17 @@ FIXES:
    makes the result sensible for new/unseen accounts.
 4. Removed bare `except Exception` swallowing the real error; re-raises with
    proper HTTP 500 so the caller can see what went wrong.
+
+FIX (NEW):
+5. community_fraud_rate and ring_membership are now looked up from the
+   pre-computed community_data.json and rings_cache.json artifacts so the
+   scorer.py override rule fires correctly and graph_score is non-zero
+   for accounts that belong to a ring or high-fraud community.
 """
+import json
 import logging
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 from fastapi import APIRouter, HTTPException
@@ -22,6 +31,67 @@ from models.ensemble.xgboost_model import top_shap_factors
 
 router = APIRouter()
 logger = logging.getLogger("nyxara.api.score")
+
+ARTIFACTS_DIR = Path(__file__).parent.parent.parent / "models" / "artifacts"
+
+# ── Cached community and ring data (loaded once at first request) ─────────────
+_community_cache: dict | None = None
+_rings_cache: list | None = None
+
+
+def _load_community_cache() -> dict:
+    """Load account→community_fraud_rate mapping. Returns {} if not available."""
+    global _community_cache
+    if _community_cache is not None:
+        return _community_cache
+    path = ARTIFACTS_DIR / "community_data.json"
+    if path.exists():
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            _community_cache = data.get("account_fraud_rate", {})
+            logger.info(f"Loaded community fraud rates for {len(_community_cache)} accounts")
+        except Exception as e:
+            logger.warning(f"Could not load community_data.json: {e}")
+            _community_cache = {}
+    else:
+        _community_cache = {}
+    return _community_cache
+
+
+def _load_rings_cache() -> list:
+    """Load rings list from rings_cache.json. Returns [] if not available."""
+    global _rings_cache
+    if _rings_cache is not None:
+        return _rings_cache
+    path = ARTIFACTS_DIR / "rings_cache.json"
+    if path.exists():
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            _rings_cache = data.get("rings", [])
+            logger.info(f"Loaded {len(_rings_cache)} rings from cache")
+        except Exception as e:
+            logger.warning(f"Could not load rings_cache.json: {e}")
+            _rings_cache = []
+    else:
+        _rings_cache = []
+    return _rings_cache
+
+
+def _get_community_fraud_rate(account_id: str) -> float:
+    """Return the Louvain community fraud rate for this account (0.0 if unknown)."""
+    cache = _load_community_cache()
+    return float(cache.get(account_id, 0.0))
+
+
+def _get_ring_membership(account_id: str) -> bool:
+    """Return True if this account appears in any detected ring."""
+    rings = _load_rings_cache()
+    for ring in rings:
+        if account_id in ring.get("accounts", []):
+            return True
+    return False
 
 
 @router.post("/score", response_model=ScoreResponse)
@@ -100,6 +170,10 @@ async def score_account(payload: AccountFeatures):
 
         occupation = str(payload.F3891 or "unknown")
 
+        # ── FIX: Look up community fraud rate and ring membership ──
+        community_fraud_rate = _get_community_fraud_rate(account_id)
+        ring_membership      = _get_ring_membership(account_id)
+
         # ── Risk fusion ───────────────────────────────────────
         result = fuse_scores(
             account_id=account_id,
@@ -107,6 +181,8 @@ async def score_account(payload: AccountFeatures):
             ensemble_score=ensemble_score,
             vae_score=vae_score,
             bei_score=payload.bei_risk_score or 0.0,
+            ring_membership=ring_membership,
+            community_fraud_rate=community_fraud_rate,
         )
 
         # ── LLM / rule-based alert ────────────────────────────
@@ -117,6 +193,7 @@ async def score_account(payload: AccountFeatures):
             occupation=occupation,
             top_factors=shap_factors,
             ring_membership=result.ring_membership,
+            community_fraud_rate=result.community_fraud_rate,
         )
 
         response = ScoreResponse(
