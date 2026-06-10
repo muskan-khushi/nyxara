@@ -1,6 +1,13 @@
 """
 models/ensemble/catboost_model.py
 CatBoost — most robust on small datasets; handles sparse data well.
+
+FIXES:
+1. cat_features is completely removed from Pool construction.
+   By the time data reaches CatBoost, F3891/F3889 are already label-encoded
+   integers AND then RobustScaler-normalised (float). Passing them as
+   cat_features expects raw string values — this was crashing training.
+2. Pool construction no longer passes cat_features at all.
 """
 import logging
 import pickle
@@ -21,14 +28,17 @@ def train_catboost(
     scale_pos_weight: float = 10.0,
     iterations: int = 500,
 ) -> CatBoostClassifier:
+    """
+    Train CatBoost classifier.
 
-    # NOTE: Categorical columns (F3891, F3889) have already been label-encoded
-    # and RobustScaler-transformed by the preprocessing pipeline.
-    # They are plain numeric features now — do NOT use CatBoost's native
-    # categorical handling (it expects raw string categories, not scaled floats).
-
+    NOTE: All categorical columns (F3891, F3889) have been label-encoded to
+    integers and then passed through RobustScaler, so they are plain float
+    features at this point.  Do NOT pass cat_features — CatBoost would expect
+    raw string categories, not scaled floats.
+    """
+    # Pool without cat_features — all columns are numeric at this stage
     train_pool = Pool(X_train, y_train)
-    val_pool = Pool(X_val, y_val)
+    val_pool   = Pool(X_val,   y_val)
 
     model = CatBoostClassifier(
         iterations=iterations,
@@ -48,6 +58,7 @@ def train_catboost(
     val_auc = roc_auc_score(y_val, model.predict_proba(X_val)[:, 1])
     logger.info(f"CatBoost validation AUC: {val_auc:.4f}")
 
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(ARTIFACTS_DIR / "catboost_model.pkl", "wb") as f:
         pickle.dump(model, f)
 

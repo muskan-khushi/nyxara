@@ -1,7 +1,13 @@
 """
 preprocessing/composite_features.py
 Engineer the 12 composite features described in the Nyxara guide.
-These are computed AFTER feature selection — they're always added on top.
+
+FIXES:
+1. Deduplicate columns FIRST (repeated pd.concat in pipeline can add duplicates).
+2. Guard occupation column against post-encoding integer dtype — map back to
+   string labels before using string operations or OCCUPATION_* dicts.
+3. All composite columns are explicitly cast to float32 to avoid dtype surprises
+   downstream (ADASYN / sklearn require homogeneous numeric types).
 """
 import logging
 import numpy as np
@@ -9,7 +15,6 @@ import pandas as pd
 
 logger = logging.getLogger("nyxara.composite")
 
-# Occupation risk weights (higher = more suspicious for financial anomalies)
 OCCUPATION_RISK_WEIGHTS = {
     "student": 1.0,
     "housewife": 0.9,
@@ -20,7 +25,6 @@ OCCUPATION_RISK_WEIGHTS = {
     "others": 0.5,
 }
 
-# Expected annual income proxy by occupation (in ₹, rough median)
 OCCUPATION_INCOME_PROXY = {
     "student": 50_000,
     "housewife": 80_000,
@@ -33,92 +37,110 @@ OCCUPATION_INCOME_PROXY = {
 
 HIGH_RISK_OCCUPATIONS_FOR_INTL = {"student", "housewife", "retired"}
 
+# Index→label map matching LabelEncoder alphabetical order for F3891
+# (agriculture=0, housewife=1, others=2, retired=3, salaried=4, selfemployed=5, student=6)
+_F3891_IDX_MAP = {
+    0: "agriculture", 1: "housewife", 2: "others",
+    3: "retired", 4: "salaried", 5: "selfemployed", 6: "student",
+}
+
+
+def _resolve_occupation(df: pd.DataFrame) -> pd.Series:
+    """
+    Return a string occupation Series regardless of whether F3891 is still
+    object dtype (pre-encoding) or int dtype (post-encoding).
+    Falls back to 'others' for any unrecognised value.
+    """
+    if "F3891" not in df.columns:
+        return pd.Series("others", index=df.index)
+
+    col = df["F3891"]
+    if pd.api.types.is_object_dtype(col):
+        return col.str.lower().str.strip().fillna("others")
+    else:
+        # Already label-encoded to int — map back to string labels
+        return col.map(_F3891_IDX_MAP).fillna("others")
+
 
 def add_composite_features(df: pd.DataFrame) -> pd.DataFrame:
-    """..."""
+    """Add 12 composite features. Safe to call before or after encoding."""
     df = df.copy()
 
-    # Deduplicate columns (can arise from concat in feature selection pipeline)
+    # ── 1. Deduplicate columns (can arise from repeated pd.concat) ────────────
     df = df.loc[:, ~df.columns.duplicated()]
 
-    # ── Helpers ───────────────────────────────────────────────
-    if "F3891" in df.columns:
-        _f3891 = df["F3891"]
-        # Guard against post-encoding int dtype
-        if pd.api.types.is_object_dtype(_f3891):
-            occ = _f3891.str.lower().str.strip().fillna("others")
-        else:
-            _idx_map = {0: "agriculture", 1: "housewife", 2: "others",
-                        3: "retired", 4: "salaried", 5: "selfemployed", 6: "student"}
-            occ = _f3891.map(_idx_map).fillna("others")
-    else:
-        occ = pd.Series("others", index=df.index)
+    # ── Resolve occupation as strings ─────────────────────────────────────────
+    occ = _resolve_occupation(df)
 
-    def safe(col, default=0.0):
-        return df[col] if col in df.columns else pd.Series(default, index=df.index)
+    def safe(col: str, default: float = 0.0) -> pd.Series:
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce").fillna(default)
+        return pd.Series(default, index=df.index, dtype="float32")
 
-    # ── 1. occupation_velocity_anomaly ────────────────────────
-    # F3894 / occupation 95th percentile txn count
+    # ── 1. occupation_velocity_anomaly ────────────────────────────────────────
     if "F3894" in df.columns and "F3891" in df.columns:
-        occ_95th = df.groupby("F3891")["F3894"].transform(lambda x: x.quantile(0.95))
-        df["occupation_velocity_anomaly"] = df["F3894"] / (occ_95th + 1e-6)
+        raw_f3891 = df["F3891"]
+        # Group by the raw column values (int or str — both work for groupby)
+        occ_95th = df.groupby(raw_f3891)["F3894"].transform(
+            lambda x: pd.to_numeric(x, errors="coerce").quantile(0.95)
+        )
+        df["occupation_velocity_anomaly"] = (
+            safe("F3894") / (occ_95th.fillna(1.0) + 1e-6)
+        ).astype("float32")
     else:
-        df["occupation_velocity_anomaly"] = 0.0
+        df["occupation_velocity_anomaly"] = np.float32(0.0)
 
-    # ── 2. pass_through_score ─────────────────────────────────
-    # F527 (debit-credit ratio) × F2737 (balance volatility)
-    df["pass_through_score"] = safe("F527") * safe("F2737").abs()
+    # ── 2. pass_through_score ─────────────────────────────────────────────────
+    df["pass_through_score"] = (safe("F527") * safe("F2737").abs()).astype("float32")
 
-    # ── 3. network_centrality_proxy ──────────────────────────
-    # F531 × log(F1692 + 1)
-    df["network_centrality_proxy"] = safe("F531") * np.log1p(safe("F1692"))
+    # ── 3. network_centrality_proxy ──────────────────────────────────────────
+    df["network_centrality_proxy"] = (
+        safe("F531") * np.log1p(safe("F1692"))
+    ).astype("float32")
 
-    # ── 4. dormancy_activation_signal ────────────────────────
-    # F3043_missing × F3894
+    # ── 4. dormancy_activation_signal ────────────────────────────────────────
     df["dormancy_activation_signal"] = (
-        safe("F3043_missing", 0) * safe("F3894")
-    )
+        safe("F3043_missing", 0.0) * safe("F3894")
+    ).astype("float32")
 
-    # ── 5. financial_impossibility_score ─────────────────────
-    # F3836 / occupation expected annual income
+    # ── 5. financial_impossibility_score ─────────────────────────────────────
     income_proxy = occ.map(OCCUPATION_INCOME_PROXY).fillna(200_000).astype(float)
-    df["financial_impossibility_score"] = safe("F3836").abs() / income_proxy
+    df["financial_impossibility_score"] = (
+        safe("F3836").abs() / income_proxy
+    ).astype("float32")
 
-    # ── 6. peer_deviation_combined ───────────────────────────
-    # |F2582| + |F2678|
-    df["peer_deviation_combined"] = safe("F2582").abs() + safe("F2678").abs()
+    # ── 6. peer_deviation_combined ───────────────────────────────────────────
+    df["peer_deviation_combined"] = (
+        safe("F2582").abs() + safe("F2678").abs()
+    ).astype("float32")
 
-    # ── 7. structuring_risk ───────────────────────────────────
-    # F2122 (cash frequency) × F3894 (txn count)
-    df["structuring_risk"] = safe("F2122") * safe("F3894")
+    # ── 7. structuring_risk ───────────────────────────────────────────────────
+    df["structuring_risk"] = (safe("F2122") * safe("F3894")).astype("float32")
 
-    # ── 8. cross_border_occupation_risk ──────────────────────
-    # F2082 × occupation_risk_weight
+    # ── 8. cross_border_occupation_risk ──────────────────────────────────────
     occ_risk = occ.map(OCCUPATION_RISK_WEIGHTS).fillna(0.5).astype(float)
-    df["cross_border_occupation_risk"] = safe("F2082") * occ_risk
+    df["cross_border_occupation_risk"] = (safe("F2082") * occ_risk).astype("float32")
 
-    # ── 9. temporal_burst_index ───────────────────────────────
-    # F3894 / max(F3043, 1) — transactions per day of relationship
-    f3043 = safe("F3043").fillna(1).clip(lower=1)
-    df["temporal_burst_index"] = safe("F3894") / f3043
+    # ── 9. temporal_burst_index ───────────────────────────────────────────────
+    f3043 = safe("F3043").fillna(1.0).clip(lower=1.0)
+    df["temporal_burst_index"] = (safe("F3894") / f3043).astype("float32")
 
-    # ── 10. risk_cluster_membership ──────────────────────────
-    # Placeholder — filled by community/louvain.py after graph build
-    # Set to 0.0 here; scorer.py will overwrite from the ring cache
+    # ── 10. risk_cluster_membership (placeholder) ────────────────────────────
     if "risk_cluster_membership" not in df.columns:
-        df["risk_cluster_membership"] = 0.0
+        df["risk_cluster_membership"] = np.float32(0.0)
 
-    # ── 11. two_hop_contamination ────────────────────────────
-    # Placeholder — filled by graph inference
+    # ── 11. two_hop_contamination (placeholder) ──────────────────────────────
     if "two_hop_contamination" not in df.columns:
-        df["two_hop_contamination"] = 0.0
+        df["two_hop_contamination"] = np.float32(0.0)
 
-    # ── 12. international_flag_occupation ─────────────────────
-    # Binary: F2082 > 0 AND occupation in {student, housewife, retired}
+    # ── 12. international_flag_occupation ─────────────────────────────────────
     is_high_risk_occ = occ.isin(HIGH_RISK_OCCUPATIONS_FOR_INTL)
     has_intl = safe("F2082") > 0
-    df["international_flag_occupation"] = (has_intl & is_high_risk_occ).astype("int8")
+    df["international_flag_occupation"] = (
+        (has_intl & is_high_risk_occ).astype("int8")
+    )
 
-    n_added = 12
-    logger.info(f"Added {n_added} composite features. DataFrame now has {len(df.columns)} columns.")
+    logger.info(
+        f"Added 12 composite features. DataFrame now has {len(df.columns)} columns."
+    )
     return df
