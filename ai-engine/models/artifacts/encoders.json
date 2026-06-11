@@ -1,15 +1,4 @@
 {
-  "F3889": {
-    "classes": [
-      "G365D",
-      "L14D",
-      "L180D",
-      "L31D",
-      "L365D",
-      "L7D",
-      "L90D"
-    ]
-  },
   "F3891": {
     "classes": [
       "agriculture",
@@ -19,6 +8,17 @@
       "salaried",
       "selfemployed",
       "student"
+    ]
+  },
+  "F3889": {
+    "classes": [
+      "G365D",
+      "L14D",
+      "L180D",
+      "L31D",
+      "L365D",
+      "L7D",
+      "L90D"
     ]
   },
   "F3886": {

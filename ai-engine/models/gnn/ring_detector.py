@@ -223,11 +223,14 @@ def detect_all_rings(
         if not _is_duplicate(r):
             all_rings.append(r)
 
-    # Star rings
+    # Stars — only flag high-risk hubs (avoids KNN false positives)
     for node in G.nodes():
         if time.time() - start_total > 60:
             break
-        ring = _detect_star(G, node, account_ids)
+        risk = G.nodes[node].get("risk", 0.0)
+        if risk < 0.5:          # only flag high-risk nodes as hub candidates
+            continue
+        ring = _detect_star(G, node, account_ids, min_spokes=5)
         if ring and not _is_duplicate(ring):
             all_rings.append(ring)
 
