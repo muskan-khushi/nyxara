@@ -1,34 +1,35 @@
 // src/context/AuthContext.jsx
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useState, useCallback } from "react";
 import api from "../services/api";
 
 const AuthContext = createContext(null);
+export const useAuth = () => useContext(AuthContext);
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => localStorage.getItem("nyxara_token"));
-  const [user,  setUser]  = useState(() => JSON.parse(localStorage.getItem("nyxara_user") || "null"));
+  const [user, setUser] = useState(() => {
+    try {
+      const t = localStorage.getItem("nyxara_token");
+      const u = localStorage.getItem("nyxara_user");
+      if (t && u) { api.defaults.headers.common["Authorization"] = `Bearer ${t}`; return JSON.parse(u); }
+    } catch {}
+    return null;
+  });
 
-  async function login(email, password) {
+  const login = useCallback(async (email, password) => {
     const { data } = await api.post("/api/auth/login", { email, password });
-    localStorage.setItem("nyxara_token", data.token);
-    localStorage.setItem("nyxara_user",  JSON.stringify(data.user));
-    setToken(data.token);
-    setUser(data.user);
-    return data;
-  }
+    const { token, user: u } = data;
+    localStorage.setItem("nyxara_token", token);
+    localStorage.setItem("nyxara_user", JSON.stringify(u));
+    api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+    setUser(u);
+  }, []);
 
-  function logout() {
+  const logout = useCallback(() => {
     localStorage.removeItem("nyxara_token");
     localStorage.removeItem("nyxara_user");
-    setToken(null);
+    delete api.defaults.headers.common["Authorization"];
     setUser(null);
-  }
+  }, []);
 
-  return (
-    <AuthContext.Provider value={{ token, user, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={{ user, login, logout }}>{children}</AuthContext.Provider>;
 }
-
-export function useAuth() { return useContext(AuthContext); }
