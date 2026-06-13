@@ -246,10 +246,182 @@ function buildGraph(rings) {
   return { nodes: Array.from(nodeMap.values()), links };
 }
 
+/* ── 3D Federated Cross-Bank Simulation Component ── */
+function FederatedGraphSim({ height = 400 }) {
+  const canvasRef = useRef(null);
+  const rotationRef = useRef({ x: 0.25, y: 0.4 });
+  const mouseRef = useRef({ isDown: false, lastX: 0, lastY: 0 });
+
+  const bankNodes = [
+    { id: "SBI", label: "State Bank of India (SBI)", x: -75, y: -35, z: -35, color: "var(--cyan)" },
+    { id: "HDFC", label: "HDFC Bank Ltd", x: 75, y: -35, z: -35, color: "var(--orange)" },
+    { id: "ICICI", label: "ICICI Bank", x: 45, y: 45, z: 55, color: "var(--orchid)" },
+    { id: "AXIS", label: "Axis Bank", x: -45, y: 45, z: 55, color: "var(--jade)" },
+    { id: "COOR", label: "FedGNN Secure SMPC Node", x: 0, y: 0, z: 0, color: "var(--frost)" }
+  ];
+
+  const bankLinks = [
+    { source: 4, target: 0 },
+    { source: 4, target: 1 },
+    { source: 4, target: 2 },
+    { source: 4, target: 3 },
+    { source: 0, target: 1 },
+    { source: 1, target: 2 },
+    { source: 2, target: 3 },
+    { source: 3, target: 0 }
+  ];
+
+  const handleMouseDown = (e) => {
+    mouseRef.current.isDown = true;
+    mouseRef.current.lastX = e.clientX;
+    mouseRef.current.lastY = e.clientY;
+  };
+
+  const handleMouseMove = (e) => {
+    if (mouseRef.current.isDown) {
+      const dx = e.clientX - mouseRef.current.lastX;
+      const dy = e.clientY - mouseRef.current.lastY;
+      rotationRef.current.y += dx * 0.007;
+      rotationRef.current.x += dy * 0.007;
+      mouseRef.current.lastX = e.clientX;
+      mouseRef.current.lastY = e.clientY;
+    }
+  };
+
+  const handleMouseUp = () => { mouseRef.current.isDown = false; };
+
+  useEffect(() => {
+    let animId;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+
+    const resize = () => {
+      canvas.width = canvas.parentNode.clientWidth * window.devicePixelRatio;
+      canvas.height = height * window.devicePixelRatio;
+      canvas.style.width = "100%";
+      canvas.style.height = `${height}px`;
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+
+    const particles = [];
+    bankLinks.forEach((link, idx) => {
+      particles.push({
+        linkIdx: idx,
+        progress: Math.random(),
+        speed: 0.005 + Math.random() * 0.006
+      });
+    });
+
+    const loop = () => {
+      if (!mouseRef.current.isDown) {
+        rotationRef.current.y += 0.002;
+      }
+
+      const W = canvas.width / window.devicePixelRatio;
+      const H = height;
+      const cx = W / 2;
+      const cy = H / 2;
+
+      ctx.clearRect(0, 0, W, H);
+
+      const projected = bankNodes.map(node => {
+        const cosY = Math.cos(rotationRef.current.y), sinY = Math.sin(rotationRef.current.y);
+        let rx = node.x * cosY - node.z * sinY;
+        let rz = node.z * cosY + node.x * sinY;
+
+        const cosX = Math.cos(rotationRef.current.x), sinX = Math.sin(rotationRef.current.x);
+        let ry = node.y * cosX - rz * sinX;
+        rz = rz * cosX + node.y * sinX;
+
+        const scale = 250 / (250 + rz + 100);
+        return { ...node, rx, ry, rz, sx: cx + rx * scale, sy: cy + ry * scale, scale };
+      });
+
+      projected.forEach((node, idx) => {
+        bankLinks.forEach(link => {
+          if (link.source === idx) {
+            const other = projected[link.target];
+            ctx.beginPath();
+            ctx.moveTo(node.sx, node.sy);
+            ctx.lineTo(other.sx, other.sy);
+            ctx.strokeStyle = idx === 4 ? "rgba(167, 139, 250, 0.15)" : "rgba(251, 113, 133, 0.08)";
+            ctx.lineWidth = idx === 4 ? 0.8 : 1.2;
+            ctx.stroke();
+          }
+        });
+      });
+
+      particles.forEach(p => {
+        const link = bankLinks[p.linkIdx];
+        const sNode = projected[link.source];
+        const tNode = projected[link.target];
+        const px = sNode.sx + (tNode.sx - sNode.sx) * p.progress;
+        const py = sNode.sy + (tNode.sy - sNode.sy) * p.progress;
+        const avgScale = (sNode.scale + tNode.scale) / 2;
+
+        ctx.beginPath();
+        ctx.arc(px, py, 2.2 * avgScale, 0, Math.PI * 2);
+        ctx.fillStyle = link.source === 4 ? "#A78BFA" : "#FB7185";
+        ctx.shadowColor = link.source === 4 ? "#A78BFA" : "#FB7185";
+        ctx.shadowBlur = 6;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        p.progress += p.speed;
+        if (p.progress > 1) p.progress = 0;
+      });
+
+      const sorted = [...projected].sort((a, b) => b.rz - a.rz);
+      sorted.forEach(node => {
+        const r = (node.id === "COOR" ? 10 : 7) * node.scale;
+        
+        ctx.beginPath();
+        ctx.arc(node.sx, node.sy, r, 0, Math.PI * 2);
+        ctx.fillStyle = node.color + "25";
+        ctx.fill();
+
+        ctx.strokeStyle = node.color;
+        ctx.lineWidth = node.id === "COOR" ? 2 : 1.2;
+        ctx.stroke();
+
+        ctx.fillStyle = "rgba(245, 243, 255, 0.7)";
+        ctx.font = "bold 8px Inter";
+        ctx.textAlign = "center";
+        ctx.fillText(node.id === "COOR" ? "SMPC Coordinator" : node.id, node.sx, node.sy - r - 4);
+      });
+
+      animId = requestAnimationFrame(loop);
+    };
+
+    loop();
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener("resize", resize);
+    };
+  }, [height]);
+
+  return (
+    <div
+      className="relative overflow-hidden w-full bg-night/30 rounded-xl"
+      style={{ height }}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+    >
+      <canvas ref={canvasRef} />
+    </div>
+  );
+}
+
 const TABS = [
   { id: "network", label: "Network Graph" },
   { id: "rings", label: "Ring Topology" },
   { id: "community", label: "Communities" },
+  { id: "federated", label: "Federated Intelligence" },
 ];
 
 export default function GraphView() {
@@ -538,6 +710,37 @@ export default function GraphView() {
                       <p className="text-frost/40 text-xs mt-0.5" dangerouslySetInnerHTML={{ __html: label }} />
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Federated Intelligence ── */}
+            {tab === "federated" && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                <div className="lg:col-span-2">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-frost/50 text-sm">Cross-Bank Federated Graph simulation — Secure SMPC weight exchange</p>
+                  </div>
+                  <FederatedGraphSim height={420} />
+                </div>
+                <div className="space-y-4">
+                  <div className="card space-y-3">
+                    <h3 className="text-frost/70 font-semibold text-xs uppercase tracking-wider font-mono">Cross-Bank SMURFIng Loop</h3>
+                    <p className="text-frost/40 text-xs leading-normal">
+                      A single bank only sees a subset of nodes. By computing homomorphic GNN embeddings across SBI, HDFC, and ICICI, we trace cyclic flows that pass-through bank boundaries before cashing out.
+                    </p>
+                    <div className="p-3 bg-night/50 border border-grape/10 rounded-lg text-[10px] font-mono text-orchid/80 space-y-1.5">
+                      <p>🏦 SBI → HDFC (Transfer ₹49,900)</p>
+                      <p>🏦 HDFC → ICICI (Transfer ₹49,500)</p>
+                      <p>🏦 ICICI → SBI (ATM Withdrawal)</p>
+                      <p className="text-crimson font-bold">⚠️ CROSS-BANK GNN ALERT: Cycle detected!</p>
+                    </div>
+                  </div>
+                  <div className="card text-center py-6">
+                    <p className="text-frost/30 text-xs font-mono mb-2 uppercase tracking-wide">Privacy Level</p>
+                    <p className="text-3xl font-bold font-mono text-jade">100% SECURE</p>
+                    <p className="text-frost/40 text-xs mt-1.5 max-w-xs mx-auto leading-normal">Zero raw customer datasets are shared. Only encrypted neural network model gradients are synchronized.</p>
+                  </div>
                 </div>
               </div>
             )}
