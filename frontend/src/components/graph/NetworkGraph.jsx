@@ -1,370 +1,858 @@
 // src/components/graph/NetworkGraph.jsx
-// Full-canvas deep-space graph — D3 force layout, zoom/pan, role shapes, ring pulses
-import { useEffect, useRef, useCallback } from "react";
-import * as d3 from "d3";
+//
+// Two-level graph intelligence view:
+//  - Level 1 (overview): Louvain communities rendered as glowing spheres,
+//    sized by member count, colored by fraud rate. Inter-community edges
+//    drawn as additive-blended arcs.
+//  - Level 2 (drill-in): clicking a community force-simulates its member
+//    accounts in 3D, nodes shaped/colored by risk + ring role, edges as
+//    glowing lines with directional flow particles.
+//
+// Rendering: three.js, InstancedMesh for nodes (single draw call per shape),
+// LineSegments for edges, sprite-based glow (no postprocessing dependency).
+//
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import * as THREE from "three";
+import { ArrowLeft, RotateCcw, ZoomIn, Info } from "lucide-react";
 
-const DECISION_COLOR = (risk) => {
-  if (risk > 0.85) return "#f87171"; // BLOCK  — red
-  if (risk > 0.70) return "#fb923c"; // FLAG   — orange
-  if (risk > 0.40) return "#fbbf24"; // REVIEW — amber
-  return "#34d399";                  // APPROVE — green
+// ─────────────────────────────────────────────────────────────────────────
+// Palette — derived from Nyxara's existing tailwind tokens
+// ─────────────────────────────────────────────────────────────────────────
+const COLOR = {
+  bg: 0x0a0518,
+  grape: 0x7b2fbe,
+  orchid: 0xc084fc,
+  cyan: 0x06b6d4,
+  amber: 0xf59e0b,
+  jade: 0x10b981,
+  crimson: 0xdc2626,
+  frost: 0xf5f3ff,
 };
 
-// Hex → rgba helper
-function hex2rgba(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
+const RISK_COLOR = (r) => {
+  if (r > 0.85) return COLOR.crimson;
+  if (r > 0.7) return 0xf97316; // orange
+  if (r > 0.4) return COLOR.amber;
+  return COLOR.jade;
+};
 
-// Draw node shape by role
-function drawShape(ctx, role, x, y, r) {
-  ctx.beginPath();
-  if (role === "hub" || role === "orchestrator") {
-    // Upward triangle — orchestrators
-    ctx.moveTo(x, y - r);
-    ctx.lineTo(x + r * 0.866, y + r * 0.5);
-    ctx.lineTo(x - r * 0.866, y + r * 0.5);
-    ctx.closePath();
-  } else if (role === "bridge" || role === "coordinator") {
-    // Diamond — bridges
-    ctx.moveTo(x, y - r);
-    ctx.lineTo(x + r, y);
-    ctx.lineTo(x, y + r);
-    ctx.lineTo(x - r, y);
-    ctx.closePath();
-  } else if (role === "terminal") {
-    // Square — terminals
-    ctx.rect(x - r * 0.8, y - r * 0.8, r * 1.6, r * 1.6);
-  } else {
-    ctx.arc(x, y, r, 0, 2 * Math.PI);
+const ROLE_GEOMETRY_SCALE = {
+  hub: 1.6,
+  orchestrator: 1.6,
+  coordinator: 1.4,
+  bridge: 1.25,
+  mule: 1.0,
+  cycler: 1.0,
+  relay: 0.9,
+  member: 0.85,
+  legitimate: 0.7,
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Demo data generators — used when no rings/clusters are supplied.
+// Mirrors the shapes returned by /api/rings + /api/clusters so this drops
+// in seamlessly once real data is wired up via props.
+// ─────────────────────────────────────────────────────────────────────────
+function genDemoClusters(n = 28) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const fraud = Math.pow(Math.random(), 2.2); // skew toward low fraud, long tail
+    out.push({
+      community_id: String(i),
+      size: Math.floor(40 + Math.random() * Math.random() * 1400),
+      fraud_rate: fraud,
+      risk_level: fraud > 0.5 ? "HIGH" : fraud > 0.2 ? "MEDIUM" : "LOW",
+    });
   }
+  return out;
 }
 
-export default function NetworkGraph({ nodes = [], links = [], onNodeClick = null, height = 520 }) {
-  const canvasRef = useRef();
-  const stateRef  = useRef({
-    simNodes: [], simLinks: [],
-    hoveredId: null, selectedId: null,
-    cam: { x: 0, y: 0, scale: 1 },
-    drag: null, panning: false, lastMouse: { x: 0, y: 0 },
-    particles: [],
-    time: 0,
-    animId: null,
-  });
-  const simRef = useRef();
-
-  // Seeded PRNG so particles are stable across re-renders
-  const makeParticles = (W, H) => {
-    let s = 1337;
-    const rng = () => { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; };
-    return Array.from({ length: 55 }, () => ({
-      x: rng() * W, y: rng() * H,
-      vx: (rng() - 0.5) * 0.18,
-      vy: (rng() - 0.5) * 0.12,
-      r: rng() * 1.4 + 0.4,
-      a: rng() * 0.3 + 0.04,
-    }));
-  };
-
-  const worldToScreen = (wx, wy, cam, W, H) => {
-    const ox = W / 2 * (1 - cam.scale);
-    const oy = H / 2 * (1 - cam.scale);
-    return [(wx + cam.x) * cam.scale + ox, (wy + cam.y) * cam.scale + oy];
-  };
-
-  const screenToWorld = (sx, sy, cam, W, H) => {
-    const ox = W / 2 * (1 - cam.scale);
-    const oy = H / 2 * (1 - cam.scale);
-    return [(sx - ox) / cam.scale - cam.x, (sy - oy) / cam.scale - cam.y];
-  };
-
-  const getNodeAt = useCallback((mx, my, W, H) => {
-    const { simNodes, cam } = stateRef.current;
-    for (let i = simNodes.length - 1; i >= 0; i--) {
-      const n = simNodes[i];
-      if (!n.x) continue;
-      const [sx, sy] = worldToScreen(n.x, n.y, cam, W, H);
-      const r = (n.role === "hub" || n.role === "orchestrator" ? 14 : n.role === "bridge" ? 12 : 9) * cam.scale;
-      if (Math.hypot(sx - mx, sy - my) < r + 4) return n;
-    }
-    return null;
-  }, []);
-
-  const drawFrame = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const W = canvas.width, H = canvas.height;
-    const { simNodes, simLinks, hoveredId, selectedId, cam, particles, time } = stateRef.current;
-
-    // ── Background ──
-    ctx.clearRect(0, 0, W, H);
-    // Deep space radial gradient
-    const bg = ctx.createRadialGradient(W * 0.35, H * 0.3, 0, W * 0.5, H * 0.5, Math.max(W, H) * 0.75);
-    bg.addColorStop(0,   "#0d1f3c");
-    bg.addColorStop(0.5, "#080e1a");
-    bg.addColorStop(1,   "#050810");
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, W, H);
-
-    // ── Dot grid ──
-    ctx.fillStyle = "rgba(30,58,138,0.18)";
-    const gs = 40 * cam.scale;
-    const offX = ((cam.x * cam.scale) % gs + gs) % gs + (W / 2 * (1 - cam.scale)) % gs;
-    const offY = ((cam.y * cam.scale) % gs + gs) % gs + (H / 2 * (1 - cam.scale)) % gs;
-    for (let x = offX % gs; x < W; x += gs)
-      for (let y = offY % gs; y < H; y += gs) {
-        ctx.beginPath();
-        ctx.arc(x, y, 0.7, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-    // ── Ambient particles ──
-    for (const p of particles) {
-      p.x += p.vx; p.y += p.vy;
-      if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
-      if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(96,165,250,${p.a})`;
-      ctx.fill();
-    }
-
-    // ── Apply camera transform ──
-    ctx.save();
-    const ox = W / 2 * (1 - cam.scale);
-    const oy = H / 2 * (1 - cam.scale);
-    ctx.translate(ox + cam.x * cam.scale, oy + cam.y * cam.scale);
-    ctx.scale(cam.scale, cam.scale);
-
-    // ── Edges ──
-    for (const link of simLinks) {
-      const s = link.source, t = link.target;
-      if (!s?.x || !t?.x) continue;
-      const isRingEdge = s.ring_id && s.ring_id === t.ring_id;
-      const isSelected = selectedId && (s.id === selectedId || t.id === selectedId);
-      const sColor = DECISION_COLOR(s.risk || 0);
-      const tColor = DECISION_COLOR(t.risk || 0);
-
-      let alpha = isRingEdge ? 0.3 : 0.06;
-      if (isSelected) alpha = Math.min(alpha * 4, 0.75);
-
-      const grad = ctx.createLinearGradient(s.x, s.y, t.x, t.y);
-      grad.addColorStop(0, hex2rgba(sColor, alpha));
-      grad.addColorStop(1, hex2rgba(tColor, alpha));
-
-      if (isRingEdge) {
-        // Slight curve on ring edges
-        const mx = (s.x + t.x) / 2 + (t.y - s.y) * 0.12;
-        const my = (s.y + t.y) / 2 - (t.x - s.x) * 0.12;
-        ctx.beginPath();
-        ctx.moveTo(s.x, s.y);
-        ctx.quadraticCurveTo(mx, my, t.x, t.y);
+function genDemoAccounts(community, n) {
+  const roles = ["hub", "mule", "mule", "mule", "bridge", "relay", "member", "legitimate"];
+  const nodes = [];
+  const hubCount = Math.max(1, Math.round(n * 0.04));
+  for (let i = 0; i < n; i++) {
+    const isHub = i < hubCount;
+    const baseFraud = community.fraud_rate;
+    const risk = Math.min(1, Math.max(0, baseFraud + (Math.random() - 0.5) * 0.4 + (isHub ? 0.15 : 0)));
+    nodes.push({
+      id: `ACC-${community.community_id}-${i.toString().padStart(4, "0")}`,
+      risk,
+      role: isHub ? "hub" : roles[Math.floor(Math.random() * roles.length)],
+      in_ring: risk > 0.65,
+    });
+  }
+  // Random-ish edges biased toward hubs
+  const links = [];
+  const hubIdx = nodes.map((n_, i) => (n_.role === "hub" ? i : -1)).filter((i) => i >= 0);
+  for (let i = 0; i < n; i++) {
+    const degree = 1 + Math.floor(Math.random() * 3);
+    for (let d = 0; d < degree; d++) {
+      let target;
+      if (hubIdx.length && Math.random() < 0.4) {
+        target = hubIdx[Math.floor(Math.random() * hubIdx.length)];
       } else {
-        ctx.beginPath();
-        ctx.moveTo(s.x, s.y);
-        ctx.lineTo(t.x, t.y);
+        target = Math.floor(Math.random() * n);
       }
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = isRingEdge ? (isSelected ? 1.4 : 0.9) : 0.4;
-      ctx.stroke();
+      if (target !== i) links.push({ source: i, target });
+    }
+  }
+  return { nodes, links };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Small reusable: circular gradient texture for glow sprites
+// ─────────────────────────────────────────────────────────────────────────
+function makeGlowTexture() {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.25, "rgba(255,255,255,0.55)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Simple custom force layout (no extra dependency).
+// Works in 3D for the drill-in view, 2D-ish (z≈0) for the overview.
+// ─────────────────────────────────────────────────────────────────────────
+function useForceLayout({ nodes, links, dims = 3, iterations = 220, spread = 1 }) {
+  return useMemo(() => {
+    const n = nodes.length;
+    if (n === 0) return { positions: new Float32Array(0) };
+
+    const positions = new Float32Array(n * 3);
+    // init on a sphere/circle so it relaxes outward nicely
+    for (let i = 0; i < n; i++) {
+      const phi = Math.acos(2 * Math.random() - 1);
+      const theta = Math.random() * Math.PI * 2;
+      const r = spread * (0.4 + 0.6 * Math.random());
+      positions[i * 3 + 0] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i * 3 + 2] = dims === 3 ? r * Math.cos(phi) * 0.6 : 0;
     }
 
-    // ── Nodes ──
-    for (const node of simNodes) {
-      if (!node.x) continue;
-      const col = DECISION_COLOR(node.risk || 0);
-      const isHub   = node.role === "hub" || node.role === "orchestrator";
-      const isBridge = node.role === "bridge" || node.role === "coordinator";
-      const r = isHub ? 13 : isBridge ? 11 : 8;
-      const isHovered  = node.id === hoveredId;
-      const isSelected = node.id === selectedId;
-      const inRing = !!node.ring_id;
+    const idx = links
+      .map((l) => [typeof l.source === "number" ? l.source : 0, typeof l.target === "number" ? l.target : 0])
+      .filter(([a, b]) => a !== b && a < n && b < n);
 
-      // Outer ambient glow for ring members
-      if (inRing) {
-        const pulse = Math.sin(time * 1.8 + node.x * 0.05) * 0.5 + 0.5;
-        const gr = ctx.createRadialGradient(node.x, node.y, r, node.x, node.y, r + 10 + pulse * 4);
-        gr.addColorStop(0, hex2rgba(col, 0.12 + pulse * 0.06));
-        gr.addColorStop(1, hex2rgba(col, 0));
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r + 10 + pulse * 4, 0, Math.PI * 2);
-        ctx.fillStyle = gr;
-        ctx.fill();
+    const repulsion = 1.0 / Math.max(1, Math.sqrt(n) * 0.12);
+    const linkDist = 1.4;
+    const center = 0.01;
+
+    for (let it = 0; it < iterations; it++) {
+      const alpha = 1 - it / iterations;
+      const disp = new Float32Array(n * 3);
+
+      // crude repulsion via grid bucketing for perf on large n
+      const cell = 1.2;
+      const grid = new Map();
+      for (let i = 0; i < n; i++) {
+        const cx = Math.floor(positions[i * 3] / cell);
+        const cy = Math.floor(positions[i * 3 + 1] / cell);
+        const cz = Math.floor(positions[i * 3 + 2] / cell);
+        const key = `${cx},${cy},${cz}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(i);
       }
-
-      // Selection rings
-      if (isSelected) {
-        for (let i = 3; i >= 1; i--) {
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, r + 6 * i, 0, Math.PI * 2);
-          ctx.strokeStyle = hex2rgba(col, 0.35 - i * 0.08);
-          ctx.lineWidth = 0.8;
-          ctx.stroke();
+      for (let i = 0; i < n; i++) {
+        const cx = Math.floor(positions[i * 3] / cell);
+        const cy = Math.floor(positions[i * 3 + 1] / cell);
+        const cz = Math.floor(positions[i * 3 + 2] / cell);
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dz = -1; dz <= 1; dz++) {
+              const key = `${cx + dx},${cy + dy},${cz + dz}`;
+              const bucket = grid.get(key);
+              if (!bucket) continue;
+              for (const j of bucket) {
+                if (j <= i) continue;
+                let ddx = positions[i * 3] - positions[j * 3];
+                let ddy = positions[i * 3 + 1] - positions[j * 3 + 1];
+                let ddz = positions[i * 3 + 2] - positions[j * 3 + 2];
+                let d2 = ddx * ddx + ddy * ddy + ddz * ddz + 0.01;
+                const f = (repulsion / d2) * alpha;
+                disp[i * 3] += ddx * f;
+                disp[i * 3 + 1] += ddy * f;
+                disp[i * 3 + 2] += ddz * f;
+                disp[j * 3] -= ddx * f;
+                disp[j * 3 + 1] -= ddy * f;
+                disp[j * 3 + 2] -= ddz * f;
+              }
+            }
+          }
         }
-      } else if (isHovered) {
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r + 7, 0, Math.PI * 2);
-        ctx.strokeStyle = hex2rgba(col, 0.5);
-        ctx.lineWidth = 1;
-        ctx.stroke();
       }
 
-      // Node fill — radial gradient from bright center
-      const grd = ctx.createRadialGradient(node.x - r * 0.3, node.y - r * 0.3, 0, node.x, node.y, r * 1.3);
-      grd.addColorStop(0, hex2rgba(col, 0.95));
-      grd.addColorStop(1, hex2rgba(col, 0.45));
-      drawShape(ctx, node.role || "member", node.x, node.y, r);
-      ctx.fillStyle = grd;
-      ctx.fill();
-
-      // Stroke
-      if (inRing || isHub || isSelected || isHovered) {
-        ctx.strokeStyle = isSelected ? col : hex2rgba(col, 0.8);
-        ctx.lineWidth = isSelected ? 1.5 : 0.8;
-        ctx.stroke();
+      // link attraction
+      for (const [a, b] of idx) {
+        let ddx = positions[b * 3] - positions[a * 3];
+        let ddy = positions[b * 3 + 1] - positions[a * 3 + 1];
+        let ddz = positions[b * 3 + 2] - positions[a * 3 + 2];
+        const dist = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz) || 0.001;
+        const f = (dist - linkDist) * 0.06 * alpha;
+        const nx = ddx / dist,
+          ny = ddy / dist,
+          nz = ddz / dist;
+        disp[a * 3] += nx * f;
+        disp[a * 3 + 1] += ny * f;
+        disp[a * 3 + 2] += nz * f;
+        disp[b * 3] -= nx * f;
+        disp[b * 3 + 1] -= ny * f;
+        disp[b * 3 + 2] -= nz * f;
       }
 
-      // Label on hover or hub
-      if (isHovered || isSelected || isHub) {
-        ctx.fillStyle = isSelected ? "rgba(255,255,255,0.9)" : "rgba(226,232,240,0.7)";
-        ctx.font = `${isHub ? "500 " : ""}9px 'JetBrains Mono', monospace`;
-        ctx.textAlign = "center";
-        ctx.fillText((node.id || "").slice(0, 12), node.x, node.y + r + 13);
+      for (let i = 0; i < n; i++) {
+        disp[i * 3] -= positions[i * 3] * center;
+        disp[i * 3 + 1] -= positions[i * 3 + 1] * center;
+        disp[i * 3 + 2] -= positions[i * 3 + 2] * (dims === 3 ? center : center * 4);
+        positions[i * 3] += disp[i * 3];
+        positions[i * 3 + 1] += disp[i * 3 + 1];
+        positions[i * 3 + 2] += disp[i * 3 + 2];
       }
     }
 
-    ctx.restore();
-    stateRef.current.time += 0.016;
-  }, []);
+    return { positions };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes.length, links.length, dims, iterations, spread]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Overview: communities as glowing spheres + arcs between them
+// ─────────────────────────────────────────────────────────────────────────
+function CommunityOverview({ communities, onSelect, hovered, setHovered }) {
+  const mountRef = useRef(null);
+  const stateRef = useRef({});
+
+  // synthesize inter-community links by risk affinity (since we don't have
+  // real cross-community edges at this aggregation level)
+  const links = useMemo(() => {
+    const out = [];
+    const sorted = [...communities].sort((a, b) => b.fraud_rate - a.fraud_rate);
+    for (let i = 0; i < sorted.length; i++) {
+      const a = communities.indexOf(sorted[i]);
+      const connections = sorted[i].fraud_rate > 0.5 ? 2 : 1;
+      for (let c = 0; c < connections; c++) {
+        const j = Math.floor(Math.random() * communities.length);
+        if (j !== a) out.push({ source: a, target: j });
+      }
+    }
+    return out;
+  }, [communities]);
+
+  const { positions } = useForceLayout({ nodes: communities, links, dims: 3, iterations: 180, spread: 9 });
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !nodes.length) return;
+    const mount = mountRef.current;
+    if (!mount) return;
 
-    const W = canvas.parentElement?.clientWidth || 800;
-    const H = height;
-    canvas.width  = W;
-    canvas.height = H;
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(COLOR.bg, 0.018);
 
-    const st = stateRef.current;
-    st.simNodes = nodes.map(n => ({ ...n }));
-    st.simLinks = links.map(l => ({ ...l }));
-    st.particles = makeParticles(W, H);
-    st.cam = { x: 0, y: 0, scale: 1 };
+    const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 1000);
+    camera.position.set(0, 0, 26);
 
-    const sim = d3.forceSimulation(st.simNodes)
-      .force("link",    d3.forceLink(st.simLinks).id(d => d.id).distance(85).strength(0.45))
-      .force("charge",  d3.forceManyBody().strength(-220))
-      .force("center",  d3.forceCenter(W / 2, H / 2))
-      .force("collide", d3.forceCollide(24));
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    mount.appendChild(renderer.domElement);
 
-    simRef.current = sim;
+    // ── starfield backdrop ──────────────────────────────────
+    const starGeo = new THREE.BufferGeometry();
+    const starCount = 600;
+    const starPos = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+      starPos[i * 3] = (Math.random() - 0.5) * 200;
+      starPos[i * 3 + 1] = (Math.random() - 0.5) * 200;
+      starPos[i * 3 + 2] = (Math.random() - 0.5) * 200 - 50;
+    }
+    starGeo.setAttribute("position", new THREE.BufferAttribute(starPos, 3));
+    const starMat = new THREE.PointsMaterial({ color: 0x4c2a7a, size: 0.6, transparent: true, opacity: 0.5 });
+    const stars = new THREE.Points(starGeo, starMat);
+    scene.add(stars);
 
-    // Tick-driven animation loop
-    const loop = () => {
-      drawFrame();
-      st.animId = requestAnimationFrame(loop);
-    };
-    loop();
-
-    // ── Pointer events ──
-    const onMouseMove = (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-
-      if (st.drag) {
-        const [wx, wy] = screenToWorld(mx, my, st.cam, W, H);
-        st.drag.fx = wx; st.drag.fy = wy;
-        return;
+    // ── edges (additive arcs) ───────────────────────────────
+    const edgePositions = [];
+    links.forEach(({ source, target }) => {
+      const ax = positions[source * 3],
+        ay = positions[source * 3 + 1],
+        az = positions[source * 3 + 2];
+      const bx = positions[target * 3],
+        by = positions[target * 3 + 1],
+        bz = positions[target * 3 + 2];
+      // curved via simple midpoint lift
+      const mx = (ax + bx) / 2,
+        my = (ay + by) / 2,
+        mz = (az + bz) / 2 + 1.5;
+      const segs = 12;
+      for (let s = 0; s < segs; s++) {
+        const t0 = s / segs,
+          t1 = (s + 1) / segs;
+        const p0 = quadBezier(ax, ay, az, mx, my, mz, bx, by, bz, t0);
+        const p1 = quadBezier(ax, ay, az, mx, my, mz, bx, by, bz, t1);
+        edgePositions.push(...p0, ...p1);
       }
-      if (st.panning) {
-        st.cam.x += (mx - st.lastMouse.x) / st.cam.scale;
-        st.cam.y += (my - st.lastMouse.y) / st.cam.scale;
-        st.lastMouse = { x: mx, y: my };
-        return;
-      }
-      const hit = getNodeAt(mx, my, W, H);
-      st.hoveredId = hit?.id || null;
-      canvas.style.cursor = hit ? "pointer" : "grab";
-    };
+    });
+    const edgeGeo = new THREE.BufferGeometry();
+    edgeGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(edgePositions), 3));
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: COLOR.grape,
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+    });
+    const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+    scene.add(edgeLines);
 
-    const onMouseDown = (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      const hit = getNodeAt(mx, my, W, H);
-      if (hit) {
-        st.drag = hit;
-        sim.alphaTarget(0.3).restart();
-        const [wx, wy] = screenToWorld(mx, my, st.cam, W, H);
-        hit.fx = wx; hit.fy = wy;
-        canvas.style.cursor = "grabbing";
-      } else {
-        st.panning = true;
-        st.lastMouse = { x: mx, y: my };
-        canvas.style.cursor = "grabbing";
-      }
-    };
+    // ── community spheres ───────────────────────────────────
+    const group = new THREE.Group();
+    scene.add(group);
 
-    const onMouseUp = (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      if (st.drag) {
-        // Was it a click (no move)?
-        const hit = getNodeAt(mx, my, W, H);
-        if (hit) {
-          st.selectedId = hit.id === st.selectedId ? null : hit.id;
-          if (onNodeClick) onNodeClick(hit.id === st.selectedId ? hit : null);
+    const glowTex = makeGlowTexture();
+    const meshes = [];
+
+    communities.forEach((c, i) => {
+      const radius = 0.35 + Math.sqrt(c.size) * 0.045;
+      const color = RISK_COLOR(c.fraud_rate);
+
+      const geo = new THREE.SphereGeometry(radius, 24, 24);
+      const mat = new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.55,
+        roughness: 0.35,
+        metalness: 0.1,
+        transparent: true,
+        opacity: 0.92,
+      });
+      const sphere = new THREE.Mesh(geo, mat);
+      sphere.position.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+      sphere.userData = { community: c, baseScale: 1 };
+      group.add(sphere);
+      meshes.push(sphere);
+
+      // glow sprite
+      const spriteMat = new THREE.SpriteMaterial({
+        map: glowTex,
+        color,
+        transparent: true,
+        opacity: c.fraud_rate > 0.5 ? 0.55 : 0.28,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const sprite = new THREE.Sprite(spriteMat);
+      const glowScale = radius * 6;
+      sprite.scale.set(glowScale, glowScale, 1);
+      sprite.position.copy(sphere.position);
+      group.add(sprite);
+    });
+
+    // ── lighting ─────────────────────────────────────────────
+    scene.add(new THREE.AmbientLight(0x9b7bd6, 0.5));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight.position.set(10, 15, 20);
+    scene.add(dirLight);
+
+    // ── raycasting for hover/click ──────────────────────────
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let hoveredMesh = null;
+
+    function onPointerMove(e) {
+      const rect = mount.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects(meshes);
+      if (hits.length) {
+        const m = hits[0].object;
+        if (hoveredMesh !== m) {
+          if (hoveredMesh) hoveredMesh.scale.set(1, 1, 1);
+          hoveredMesh = m;
+          setHovered(m.userData.community);
         }
-        sim.alphaTarget(0);
-        st.drag.fx = null; st.drag.fy = null;
-        st.drag = null;
+        renderer.domElement.style.cursor = "pointer";
+      } else {
+        if (hoveredMesh) hoveredMesh.scale.set(1, 1, 1);
+        hoveredMesh = null;
+        setHovered(null);
+        renderer.domElement.style.cursor = "grab";
       }
-      st.panning = false;
-      canvas.style.cursor = "grab";
-    };
+    }
 
-    const onWheel = (e) => {
+    function onClick() {
+      if (hoveredMesh) onSelect(hoveredMesh.userData.community);
+    }
+
+    renderer.domElement.addEventListener("pointermove", onPointerMove);
+    renderer.domElement.addEventListener("click", onClick);
+
+    // ── orbit-ish drag controls (lightweight, no extra deps) ─
+    let isDragging = false;
+    let prevX = 0,
+      prevY = 0;
+    let rotY = 0,
+      rotX = 0;
+    let targetDistance = 26;
+    let distance = 26;
+
+    function onDown(e) {
+      isDragging = true;
+      prevX = e.clientX;
+      prevY = e.clientY;
+    }
+    function onUp() {
+      isDragging = false;
+    }
+    function onMove(e) {
+      if (!isDragging) return;
+      const dx = e.clientX - prevX;
+      const dy = e.clientY - prevY;
+      rotY += dx * 0.005;
+      rotX += dy * 0.005;
+      rotX = Math.max(-1, Math.min(1, rotX));
+      prevX = e.clientX;
+      prevY = e.clientY;
+    }
+    function onWheel(e) {
       e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      const factor = e.deltaY > 0 ? 0.88 : 1.14;
-      const [wx, wy] = screenToWorld(mx, my, st.cam, W, H);
-      st.cam.scale = Math.max(0.25, Math.min(5, st.cam.scale * factor));
-      // Keep mouse world point fixed
-      const ox = W / 2 * (1 - st.cam.scale);
-      const oy = H / 2 * (1 - st.cam.scale);
-      st.cam.x = (mx - ox) / st.cam.scale - wx;
-      st.cam.y = (my - oy) / st.cam.scale - wy;
-    };
+      targetDistance += e.deltaY * 0.01;
+      targetDistance = Math.max(8, Math.min(60, targetDistance));
+    }
 
-    canvas.addEventListener("mousemove",  onMouseMove);
-    canvas.addEventListener("mousedown",  onMouseDown);
-    canvas.addEventListener("mouseup",    onMouseUp);
-    canvas.addEventListener("mouseleave", onMouseUp);
-    canvas.addEventListener("wheel",      onWheel, { passive: false });
+    renderer.domElement.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointermove", onMove);
+    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+
+    // ── render loop ──────────────────────────────────────────
+    let raf;
+    let t = 0;
+    function animate() {
+      t += 0.01;
+      distance += (targetDistance - distance) * 0.08;
+      camera.position.x = distance * Math.sin(rotY) * Math.cos(rotX);
+      camera.position.z = distance * Math.cos(rotY) * Math.cos(rotX);
+      camera.position.y = distance * Math.sin(rotX);
+      camera.lookAt(0, 0, 0);
+
+      // pulse high-risk communities
+      meshes.forEach((m) => {
+        const c = m.userData.community;
+        if (c.fraud_rate > 0.5) {
+          const pulse = 1 + Math.sin(t * 2 + m.position.x) * 0.06;
+          m.scale.setScalar(pulse);
+        }
+      });
+
+      group.rotation.y += 0.0008;
+      stars.rotation.y += 0.0001;
+
+      renderer.render(scene, camera);
+      raf = requestAnimationFrame(animate);
+    }
+    animate();
+
+    function onResize() {
+      const w = mount.clientWidth,
+        h = mount.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener("resize", onResize);
+
+    stateRef.current = { renderer, mount };
 
     return () => {
-      sim.stop();
-      cancelAnimationFrame(st.animId);
-      canvas.removeEventListener("mousemove",  onMouseMove);
-      canvas.removeEventListener("mousedown",  onMouseDown);
-      canvas.removeEventListener("mouseup",    onMouseUp);
-      canvas.removeEventListener("mouseleave", onMouseUp);
-      canvas.removeEventListener("wheel",      onWheel);
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
+      renderer.domElement.removeEventListener("click", onClick);
+      renderer.domElement.removeEventListener("pointerdown", onDown);
+      renderer.domElement.removeEventListener("wheel", onWheel);
+      renderer.dispose();
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+      geoDisposeAll(scene);
     };
-  }, [nodes, links, height, drawFrame, getNodeAt, onNodeClick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [communities, links, positions]);
+
+  return <div ref={mountRef} className="w-full h-full" style={{ cursor: "grab" }} />;
+}
+
+// quadratic bezier helper
+function quadBezier(ax, ay, az, mx, my, mz, bx, by, bz, t) {
+  const x = (1 - t) * (1 - t) * ax + 2 * (1 - t) * t * mx + t * t * bx;
+  const y = (1 - t) * (1 - t) * ay + 2 * (1 - t) * t * my + t * t * by;
+  const z = (1 - t) * (1 - t) * az + 2 * (1 - t) * t * mz + t * t * bz;
+  return [x, y, z];
+}
+
+function geoDisposeAll(scene) {
+  scene.traverse((obj) => {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) {
+      if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+      else obj.material.dispose();
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Drill-in: account-level force graph for one community
+// ─────────────────────────────────────────────────────────────────────────
+function AccountGraph({ community, accounts, onNodeClick }) {
+  const mountRef = useRef(null);
+
+  const { nodes, links } = accounts;
+  const { positions } = useForceLayout({ nodes, links, dims: 3, iterations: 200, spread: 7 });
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(COLOR.bg, 0.03);
+
+    const camera = new THREE.PerspectiveCamera(50, mount.clientWidth / mount.clientHeight, 0.1, 1000);
+    camera.position.set(0, 0, 18);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    mount.appendChild(renderer.domElement);
+
+    const n = nodes.length;
+
+    // ── edges ────────────────────────────────────────────────
+    const edgePos = new Float32Array(links.length * 6);
+    const edgeColors = new Float32Array(links.length * 6);
+    links.forEach((l, i) => {
+      const a = l.source,
+        b = l.target;
+      edgePos[i * 6] = positions[a * 3];
+      edgePos[i * 6 + 1] = positions[a * 3 + 1];
+      edgePos[i * 6 + 2] = positions[a * 3 + 2];
+      edgePos[i * 6 + 3] = positions[b * 3];
+      edgePos[i * 6 + 4] = positions[b * 3 + 1];
+      edgePos[i * 6 + 5] = positions[b * 3 + 2];
+
+      const col = new THREE.Color(COLOR.grape);
+      edgeColors[i * 6] = col.r;
+      edgeColors[i * 6 + 1] = col.g;
+      edgeColors[i * 6 + 2] = col.b;
+      edgeColors[i * 6 + 3] = col.r;
+      edgeColors[i * 6 + 4] = col.g;
+      edgeColors[i * 6 + 5] = col.b;
+    });
+    const edgeGeo = new THREE.BufferGeometry();
+    edgeGeo.setAttribute("position", new THREE.BufferAttribute(edgePos, 3));
+    edgeGeo.setAttribute("color", new THREE.BufferAttribute(edgeColors, 3));
+    const edgeMat = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.18,
+      blending: THREE.AdditiveBlending,
+    });
+    const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+    scene.add(edgeLines);
+
+    // ── nodes via InstancedMesh (one draw call) ─────────────
+    const geo = new THREE.IcosahedronGeometry(0.16, 1);
+    const mat = new THREE.MeshStandardMaterial({
+      roughness: 0.3,
+      metalness: 0.15,
+      emissiveIntensity: 0.7,
+    });
+    const inst = new THREE.InstancedMesh(geo, mat, n);
+    const dummy = new THREE.Object3D();
+    const colorArr = new Float32Array(n * 3);
+
+    for (let i = 0; i < n; i++) {
+      const node = nodes[i];
+      const scale = (ROLE_GEOMETRY_SCALE[node.role] || 0.85) * (0.7 + node.risk * 0.6);
+      dummy.position.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+      dummy.scale.setScalar(scale);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+
+      const c = new THREE.Color(RISK_COLOR(node.risk));
+      colorArr[i * 3] = c.r;
+      colorArr[i * 3 + 1] = c.g;
+      colorArr[i * 3 + 2] = c.b;
+      inst.setColorAt(i, c);
+    }
+    inst.instanceColor = new THREE.InstancedBufferAttribute(colorArr, 3);
+    scene.add(inst);
+
+    // emissive needs per-instance — three's MeshStandardMaterial uses
+    // instanceColor for `color`; fake emissive via a second additive layer
+    const glowTex = makeGlowTexture();
+    const glowGroup = new THREE.Group();
+    const ringHubs = [];
+    nodes.forEach((node, i) => {
+      if (node.risk > 0.6 || node.role === "hub") {
+        const c = new THREE.Color(RISK_COLOR(node.risk));
+        const spriteMat = new THREE.SpriteMaterial({
+          map: glowTex,
+          color: c,
+          transparent: true,
+          opacity: node.role === "hub" ? 0.6 : 0.32,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const sprite = new THREE.Sprite(spriteMat);
+        const s = node.role === "hub" ? 1.4 : 0.9;
+        sprite.scale.set(s, s, 1);
+        sprite.position.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+        glowGroup.add(sprite);
+        if (node.role === "hub") ringHubs.push(sprite);
+      }
+    });
+    scene.add(glowGroup);
+
+    // ── lighting ─────────────────────────────────────────────
+    scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    dirLight.position.set(8, 12, 16);
+    scene.add(dirLight);
+
+    // ── interaction: drag rotate + wheel zoom + click pick ──
+    let isDragging = false,
+      prevX = 0,
+      prevY = 0;
+    let rotY = 0,
+      rotX = 0.15;
+    let targetDistance = 18,
+      distance = 18;
+
+    function onDown(e) {
+      isDragging = true;
+      prevX = e.clientX;
+      prevY = e.clientY;
+    }
+    function onUp() {
+      isDragging = false;
+    }
+    function onMove(e) {
+      if (!isDragging) return;
+      rotY += (e.clientX - prevX) * 0.005;
+      rotX += (e.clientY - prevY) * 0.005;
+      rotX = Math.max(-1.2, Math.min(1.2, rotX));
+      prevX = e.clientX;
+      prevY = e.clientY;
+    }
+    function onWheel(e) {
+      e.preventDefault();
+      targetDistance += e.deltaY * 0.008;
+      targetDistance = Math.max(4, Math.min(40, targetDistance));
+    }
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    function onClick(e) {
+      const rect = mount.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObject(inst);
+      if (hits.length) {
+        const id = hits[0].instanceId;
+        onNodeClick?.(nodes[id]);
+      }
+    }
+
+    renderer.domElement.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointermove", onMove);
+    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+    renderer.domElement.addEventListener("click", onClick);
+
+    let raf;
+    let t = 0;
+    function animate() {
+      t += 0.01;
+      distance += (targetDistance - distance) * 0.1;
+      camera.position.x = distance * Math.sin(rotY) * Math.cos(rotX);
+      camera.position.z = distance * Math.cos(rotY) * Math.cos(rotX);
+      camera.position.y = distance * Math.sin(rotX);
+      camera.lookAt(0, 0, 0);
+
+      ringHubs.forEach((s, i) => {
+        const pulse = 1.4 + Math.sin(t * 2.4 + i) * 0.25;
+        s.scale.set(pulse, pulse, 1);
+      });
+
+      renderer.render(scene, camera);
+      raf = requestAnimationFrame(animate);
+    }
+    animate();
+
+    function onResize() {
+      const w = mount.clientWidth,
+        h = mount.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      renderer.domElement.removeEventListener("pointerdown", onDown);
+      renderer.domElement.removeEventListener("wheel", onWheel);
+      renderer.domElement.removeEventListener("click", onClick);
+      renderer.dispose();
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+      geoDisposeAll(scene);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [community, nodes, links, positions]);
+
+  return <div ref={mountRef} className="w-full h-full" style={{ cursor: "grab" }} />;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Top-level component
+// ─────────────────────────────────────────────────────────────────────────
+export default function NetworkGraph({
+  communities: communitiesProp,
+  getCommunityAccounts, // optional: (community) => { nodes, links }
+  height = 560,
+}) {
+  const communities = useMemo(() => communitiesProp?.length ? communitiesProp : genDemoClusters(), [communitiesProp]);
+
+  const [selected, setSelected] = useState(null);
+  const [hovered, setHovered] = useState(null);
+  const [pickedNode, setPickedNode] = useState(null);
+
+  const accountData = useMemo(() => {
+    if (!selected) return null;
+    if (getCommunityAccounts) return getCommunityAccounts(selected);
+    return genDemoAccounts(selected, Math.min(selected.size, 220));
+  }, [selected, getCommunityAccounts]);
+
+  const handleBack = useCallback(() => {
+    setSelected(null);
+    setPickedNode(null);
+  }, []);
+
+  const totalAccounts = useMemo(() => communities.reduce((s, c) => s + c.size, 0), [communities]);
+  const totalEdges = useMemo(
+    () => Math.round(communities.reduce((s, c) => s + c.size * (1.2 + c.fraud_rate * 4), 0)),
+    [communities]
+  );
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: "100%", height, display: "block", borderRadius: "0.75rem", cursor: "grab" }}
-    />
+    <div className="relative w-full rounded-xl overflow-hidden border border-grape/20" style={{ height, background: "#0a0518" }}>
+      {/* Header bar */}
+      <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-night/90 to-transparent pointer-events-none">
+        <div className="pointer-events-auto">
+          {selected ? (
+            <button
+              onClick={handleBack}
+              className="flex items-center gap-1.5 text-frost/70 hover:text-orchid text-sm font-medium transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" /> Back to communities
+            </button>
+          ) : (
+            <div>
+              <p className="text-frost text-sm font-semibold">Graph Intelligence</p>
+              <p className="text-frost/40 text-xs font-mono">
+                {communities.length} communities · {totalAccounts.toLocaleString()} accounts · ~{totalEdges.toLocaleString()} links
+              </p>
+            </div>
+          )}
+        </div>
+
+        {selected && (
+          <div className="pointer-events-auto text-right">
+            <p className="text-frost text-sm font-semibold font-mono">Community {selected.community_id}</p>
+            <p className="text-frost/40 text-xs">
+              {selected.size.toLocaleString()} accounts ·{" "}
+              <span style={{ color: `#${RISK_COLOR(selected.fraud_rate).toString(16).padStart(6, "0")}` }}>
+                {(selected.fraud_rate * 100).toFixed(0)}% fraud rate
+              </span>
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Hover tooltip (overview) */}
+      {!selected && hovered && (
+        <div className="absolute top-16 left-4 z-10 bg-abyss/90 border border-grape/30 rounded-lg px-3 py-2 text-xs backdrop-blur-sm pointer-events-none">
+          <p className="text-frost font-mono font-semibold">Community {hovered.community_id}</p>
+          <p className="text-frost/50 mt-0.5">{hovered.size.toLocaleString()} accounts</p>
+          <p className="mt-0.5" style={{ color: `#${RISK_COLOR(hovered.fraud_rate).toString(16).padStart(6, "0")}` }}>
+            {(hovered.fraud_rate * 100).toFixed(1)}% fraud rate · {hovered.risk_level}
+          </p>
+          <p className="text-frost/30 text-[10px] mt-1 flex items-center gap-1">
+            <ZoomIn className="w-3 h-3" /> Click to inspect accounts
+          </p>
+        </div>
+      )}
+
+      {/* Picked node detail (drill-in) */}
+      {selected && pickedNode && (
+        <div className="absolute bottom-4 left-4 z-10 bg-abyss/90 border border-grape/30 rounded-lg px-3 py-2 text-xs backdrop-blur-sm max-w-xs">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-frost font-mono font-semibold truncate">{pickedNode.id}</p>
+            <span
+              className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide"
+              style={{
+                color: `#${RISK_COLOR(pickedNode.risk).toString(16).padStart(6, "0")}`,
+                border: `1px solid #${RISK_COLOR(pickedNode.risk).toString(16).padStart(6, "0")}40`,
+              }}
+            >
+              {pickedNode.role}
+            </span>
+          </div>
+          <p className="text-frost/50">Risk score: {(pickedNode.risk * 100).toFixed(0)}</p>
+          {pickedNode.in_ring && <p className="text-crimson mt-0.5">⚠ Ring member</p>}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div className="absolute bottom-4 right-4 z-10 flex items-center gap-3 text-[10px] text-frost/40 bg-abyss/70 backdrop-blur-sm rounded-lg px-3 py-1.5 border border-grape/10">
+        <LegendDot color={COLOR.crimson} label="Block / Critical" />
+        <LegendDot color={0xf97316} label="Flag" />
+        <LegendDot color={COLOR.amber} label="Review" />
+        <LegendDot color={COLOR.jade} label="Approve" />
+        <span className="flex items-center gap-1">
+          <Info className="w-3 h-3" /> {selected ? "drag to rotate · scroll to zoom · click a node" : "drag to rotate · scroll to zoom · click a community"}
+        </span>
+      </div>
+
+      {/* Graph canvas */}
+      {!selected ? (
+        <CommunityOverview communities={communities} onSelect={setSelected} hovered={hovered} setHovered={setHovered} />
+      ) : (
+        <AccountGraph community={selected} accounts={accountData} onNodeClick={setPickedNode} />
+      )}
+    </div>
+  );
+}
+
+function LegendDot({ color, label }) {
+  const hex = `#${color.toString(16).padStart(6, "0")}`;
+  return (
+    <span className="flex items-center gap-1">
+      <span className="w-2 h-2 rounded-full" style={{ background: hex, boxShadow: `0 0 6px ${hex}` }} />
+      {label}
+    </span>
   );
 }
