@@ -2,6 +2,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { io } from "socket.io-client";
 import api from "../services/api";
+import { useAuth } from "./AuthContext";
 
 const AlertContext = createContext(null);
 export const useAlerts = () => useContext(AlertContext);
@@ -12,16 +13,22 @@ export function AlertProvider({ children }) {
   const [alerts, setAlerts] = useState([]);
   const [connected, setConnected] = useState(false);
   const socketRef = useRef(null);
+  const { user } = useAuth();
 
   // Load initial alerts
   useEffect(() => {
+    if (!user) {
+      setAlerts([]);
+      return;
+    }
     api.get("/api/alerts", { params: { limit: 50 } })
       .then(r => setAlerts(r.data.alerts || []))
       .catch(() => {});
-  }, []);
+  }, [user]);
 
   // WebSocket connection
   useEffect(() => {
+    if (!user) return;
     const token = localStorage.getItem("nyxara_token");
     if (!token) return;
 
@@ -37,18 +44,23 @@ export function AlertProvider({ children }) {
     socket.on("connect_error", () => setConnected(false));
 
     socket.on("new_alert", alert => {
-      setAlerts(prev => [alert, ...prev.filter(a => a.alertId !== alert.alertId)]);
+      const normalized = {
+        ...alert,
+        _id: alert._id || alert.alertId,
+        alertId: alert.alertId || alert._id
+      };
+      setAlerts(prev => [normalized, ...prev.filter(a => (a.alertId || a._id) !== normalized.alertId)]);
       // Browser notification (if permission granted)
-      if (Notification.permission === "granted" && alert.decision === "BLOCK") {
-        new Notification(`Nyxara: BLOCK — ${alert.accountId}`, {
-          body: `Risk score: ${Math.round((alert.riskScore || 0) * 100)}`,
+      if (Notification.permission === "granted" && normalized.decision === "BLOCK") {
+        new Notification(`Nyxara: BLOCK — ${normalized.accountId}`, {
+          body: `Risk score: ${Math.round((normalized.riskScore || 0) * 100)}`,
           icon: "/nyxara-logo.svg",
         });
       }
     });
 
     socket.on("alert_updated", updated => {
-      setAlerts(prev => prev.map(a => a.alertId === updated.alertId ? { ...a, ...updated } : a));
+      setAlerts(prev => prev.map(a => (a.alertId || a._id) === updated.alertId ? { ...a, ...updated, analystAction: updated.action } : a));
     });
 
     socket.emit("subscribe_alerts");
@@ -58,10 +70,15 @@ export function AlertProvider({ children }) {
     if (Notification.permission === "default") Notification.requestPermission();
 
     return () => { socket.disconnect(); };
-  }, []);
+  }, [user]);
 
   const addAlert = useCallback(alert => {
-    setAlerts(prev => [alert, ...prev]);
+    const normalized = {
+      ...alert,
+      _id: alert._id || alert.alertId,
+      alertId: alert.alertId || alert._id
+    };
+    setAlerts(prev => [normalized, ...prev]);
   }, []);
 
   return (

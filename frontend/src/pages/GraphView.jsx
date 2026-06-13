@@ -1,222 +1,16 @@
 // src/pages/GraphView.jsx
-// Mule network topology — D3 force graph + ring inspector + community view
+// Mule network topology — deep-space canvas graph + ring inspector + community view
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import * as d3 from "d3";
 import api from "../services/api";
+import NetworkGraph from "../components/graph/NetworkGraph";
+import RingViewer   from "../components/graph/RingViewer";
+import CommunityView from "../components/graph/CommunityView";
 
-/* ── Risk color helper ── */
-const riskColor = (r) => {
-  if (r > 0.85) return "#DC2626";
-  if (r > 0.70) return "#F97316";
-  if (r > 0.40) return "#F59E0B";
-  return "#10B981";
-};
-
-/* ── D3 Network Canvas ── */
-function NetworkCanvas({ nodes = [], links = [], onNodeClick, height = 480 }) {
-  const canvasRef = useRef();
-  const simRef = useRef();
-
-  const draw = useCallback((canvas, simNodes, simLinks, hoveredId) => {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const { width: W, height: H } = canvas;
-    ctx.clearRect(0, 0, W, H);
-
-    // Background
-    ctx.fillStyle = "rgba(18,8,46,0.85)";
-    ctx.fillRect(0, 0, W, H);
-
-    // Draw grid (subtle)
-    ctx.strokeStyle = "rgba(123,47,190,0.04)";
-    ctx.lineWidth = 0.5;
-    for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-    for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-
-    // Links
-    simLinks.forEach(link => {
-      const s = link.source, t = link.target;
-      if (!s?.x || !t?.x) return;
-      const grad = ctx.createLinearGradient(s.x, s.y, t.x, t.y);
-      grad.addColorStop(0, "rgba(123,47,190,0.15)");
-      grad.addColorStop(1, "rgba(192,132,252,0.08)");
-      ctx.beginPath();
-      ctx.moveTo(s.x, s.y);
-      ctx.lineTo(t.x, t.y);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    });
-
-    // Nodes
-    simNodes.forEach(node => {
-      if (!node.x) return;
-      const r = node.role === "hub" || node.role === "orchestrator" ? 14 : node.role === "bridge" ? 11 : 8;
-      const color = riskColor(node.risk || 0);
-      const isHovered = node.id === hoveredId;
-
-      // Glow ring for high-risk
-      if ((node.risk || 0) > 0.7) {
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r + 6, 0, 2 * Math.PI);
-        ctx.fillStyle = color + "12";
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r + 3, 0, 2 * Math.PI);
-        ctx.fillStyle = color + "20";
-        ctx.fill();
-      }
-
-      // Ring membership pulse
-      if (node.in_ring) {
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r + 4, 0, 2 * Math.PI);
-        ctx.strokeStyle = color + "40";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-
-      // Hover highlight
-      if (isHovered) {
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r + 7, 0, 2 * Math.PI);
-        ctx.strokeStyle = "#C084FC60";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-
-      // Node shape by role
-      ctx.beginPath();
-      if (node.role === "hub" || node.role === "orchestrator") {
-        // Diamond
-        ctx.moveTo(node.x, node.y - r);
-        ctx.lineTo(node.x + r, node.y);
-        ctx.lineTo(node.x, node.y + r);
-        ctx.lineTo(node.x - r, node.y);
-        ctx.closePath();
-      } else if (node.role === "bridge") {
-        // Triangle
-        ctx.moveTo(node.x, node.y - r);
-        ctx.lineTo(node.x + r * 0.866, node.y + r * 0.5);
-        ctx.lineTo(node.x - r * 0.866, node.y + r * 0.5);
-        ctx.closePath();
-      } else {
-        ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-      }
-      ctx.fillStyle = color + "22";
-      ctx.fill();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = isHovered ? 2 : 1.5;
-      ctx.stroke();
-
-      // Label
-      if (isHovered || r >= 12) {
-        ctx.fillStyle = "rgba(245,243,255,0.75)";
-        ctx.font = "8px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText((node.id || "").slice(0, 10), node.x, node.y + r + 12);
-      }
-    });
-  }, []);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !nodes.length) return;
-
-    const W = canvas.parentElement?.clientWidth || 600;
-    const H = height;
-    canvas.width = W;
-    canvas.height = H;
-
-    const simNodes = nodes.map(n => ({ ...n }));
-    const simLinks = links.map(l => ({ ...l }));
-    let hoveredId = null;
-
-    const sim = d3.forceSimulation(simNodes)
-      .force("link", d3.forceLink(simLinks).id(d => d.id).distance(90).strength(0.5))
-      .force("charge", d3.forceManyBody().strength(-200))
-      .force("center", d3.forceCenter(W / 2, H / 2))
-      .force("collide", d3.forceCollide(22));
-
-    simRef.current = sim;
-    sim.on("tick", () => draw(canvas, simNodes, simLinks, hoveredId));
-
-    const cvs = d3.select(canvas);
-    let dragNode = null;
-
-    cvs.on("mousedown", event => {
-      const [mx, my] = d3.pointer(event);
-      dragNode = simNodes.find(n => n.x && Math.hypot(n.x - mx, n.y - my) < 22);
-      if (dragNode) { sim.alphaTarget(0.3).restart(); dragNode.fx = dragNode.x; dragNode.fy = dragNode.y; }
-    });
-    cvs.on("mousemove", event => {
-      const [mx, my] = d3.pointer(event);
-      if (dragNode) { dragNode.fx = mx; dragNode.fy = my; return; }
-      const found = simNodes.find(n => n.x && Math.hypot(n.x - mx, n.y - my) < 18);
-      hoveredId = found?.id || null;
-      canvas.style.cursor = found ? "pointer" : "grab";
-      draw(canvas, simNodes, simLinks, hoveredId);
-    });
-    cvs.on("mouseup", () => {
-      if (dragNode) { sim.alphaTarget(0); dragNode.fx = null; dragNode.fy = null; dragNode = null; }
-    });
-    cvs.on("click", event => {
-      const [mx, my] = d3.pointer(event);
-      const clicked = simNodes.find(n => n.x && Math.hypot(n.x - mx, n.y - my) < 18);
-      if (clicked && onNodeClick) onNodeClick(clicked);
-    });
-
-    return () => sim.stop();
-  }, [nodes, links, height, draw, onNodeClick]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: "100%", height, cursor: "grab", display: "block", borderRadius: "0.75rem" }}
-    />
-  );
-}
-
-/* ── Ring topology badge ── */
-const SHAPE_COLORS = {
-  STAR: "text-crimson border-crimson/30 bg-crimson/10",
-  CHAIN: "text-amber border-amber/30 bg-amber/10",
-  CYCLE: "text-orchid border-orchid/30 bg-orchid/10",
-  CLUSTER: "text-cyan border-cyan/30 bg-cyan/10",
-  BIPARTITE: "text-jade border-jade/30 bg-jade/10",
-};
-
-/* ── Community scatter ── */
-function CommunitySummary({ communities }) {
-  if (!communities.length) return <p className="text-frost/30 text-sm text-center py-8">No community data.</p>;
-
-  return (
-    <div className="space-y-2">
-      {communities.slice(0, 10).map(c => (
-        <div key={c.community_id} className="flex items-center gap-3 py-2 border-b border-grape/8 last:border-0">
-          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${c.fraud_rate > 0.5 ? "bg-crimson" : c.fraud_rate > 0.2 ? "bg-amber" : "bg-jade"}`} />
-          <span className="text-frost/50 font-mono text-xs w-20">Community {c.community_id}</span>
-          <div className="flex-1 h-1.5 bg-grape/10 rounded-full overflow-hidden">
-            <div className="h-full rounded-full" style={{
-              width: `${c.fraud_rate * 100}%`,
-              background: c.fraud_rate > 0.5 ? "#DC2626" : c.fraud_rate > 0.2 ? "#F59E0B" : "#10B981",
-            }} />
-          </div>
-          <span className="text-xs font-mono font-bold w-10 text-right" style={{
-            color: c.fraud_rate > 0.5 ? "#DC2626" : c.fraud_rate > 0.2 ? "#F59E0B" : "#10B981",
-          }}>{(c.fraud_rate * 100).toFixed(0)}%</span>
-          <span className="text-frost/30 text-xs w-16 text-right">{c.size} accts</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ── Build D3 nodes/links from rings ── */
+/* ── Build D3 nodes/links from rings API response ── */
 function buildGraph(rings) {
   const nodeMap = new Map();
-  const links = [];
+  const links   = [];
 
   rings.forEach(ring => {
     const roles = ring.roles || {};
@@ -224,71 +18,54 @@ function buildGraph(rings) {
       if (!nodeMap.has(id)) {
         nodeMap.set(id, {
           id,
-          risk: ring.fraud_rate * (0.85 + Math.random() * 0.15),
-          role: roles[id] || "member",
+          risk:    ring.fraud_rate * (0.85 + Math.random() * 0.15),
+          role:    roles[id] || "member",
           in_ring: true,
           ring_id: ring.ring_id,
-          shape: ring.shape,
+          shape:   ring.shape,
         });
       }
     });
 
     const accts = ring.accounts || [];
-    const hub = ring.hub_node;
+    const hub   = ring.hub_node;
     if (ring.shape === "STAR" && hub) {
       accts.filter(a => a !== hub).forEach(mule => links.push({ source: hub, target: mule }));
     } else {
-      for (let i = 0; i < accts.length - 1; i++) links.push({ source: accts[i], target: accts[i + 1] });
-      if (ring.shape === "CYCLE" && accts.length > 1) links.push({ source: accts[accts.length - 1], target: accts[0] });
+      for (let i = 0; i < accts.length - 1; i++)
+        links.push({ source: accts[i], target: accts[i + 1] });
+      if (ring.shape === "CYCLE" && accts.length > 1)
+        links.push({ source: accts[accts.length - 1], target: accts[0] });
     }
   });
 
   return { nodes: Array.from(nodeMap.values()), links };
 }
 
-/* ── 3D Federated Cross-Bank Simulation Component ── */
-function FederatedGraphSim({ height = 400 }) {
-  const canvasRef = useRef(null);
-  const rotationRef = useRef({ x: 0.25, y: 0.4 });
-  const mouseRef = useRef({ isDown: false, lastX: 0, lastY: 0 });
+/* ── Decision color ── */
+const riskColor = (r) => {
+  if (r > 0.85) return "#f87171";
+  if (r > 0.70) return "#fb923c";
+  if (r > 0.40) return "#fbbf24";
+  return "#34d399";
+};
+
+/* ── Federated 3-D simulation (unchanged logic, refreshed styling) ── */
+function FederatedGraphSim({ height = 420 }) {
+  const canvasRef  = useRef(null);
+  const rotRef     = useRef({ x: 0.25, y: 0.4 });
+  const mouseRef   = useRef({ down: false, lx: 0, ly: 0 });
 
   const bankNodes = [
-    { id: "SBI", label: "State Bank of India (SBI)", x: -75, y: -35, z: -35, color: "var(--cyan)" },
-    { id: "HDFC", label: "HDFC Bank Ltd", x: 75, y: -35, z: -35, color: "var(--orange)" },
-    { id: "ICICI", label: "ICICI Bank", x: 45, y: 45, z: 55, color: "var(--orchid)" },
-    { id: "AXIS", label: "Axis Bank", x: -45, y: 45, z: 55, color: "var(--jade)" },
-    { id: "COOR", label: "FedGNN Secure SMPC Node", x: 0, y: 0, z: 0, color: "var(--frost)" }
+    { id: "SBI",   label: "State Bank of India", x: -75, y: -35, z: -35, color: "#38bdf8" },
+    { id: "HDFC",  label: "HDFC Bank",           x:  75, y: -35, z: -35, color: "#fb923c" },
+    { id: "ICICI", label: "ICICI Bank",           x:  45, y:  45, z:  55, color: "#c084fc" },
+    { id: "AXIS",  label: "Axis Bank",            x: -45, y:  45, z:  55, color: "#34d399" },
+    { id: "SMPC",  label: "FedGNN SMPC Node",     x:   0, y:   0, z:   0, color: "#f5f3ff" },
   ];
-
   const bankLinks = [
-    { source: 4, target: 0 },
-    { source: 4, target: 1 },
-    { source: 4, target: 2 },
-    { source: 4, target: 3 },
-    { source: 0, target: 1 },
-    { source: 1, target: 2 },
-    { source: 2, target: 3 },
-    { source: 3, target: 0 }
+    [4,0],[4,1],[4,2],[4,3],[0,1],[1,2],[2,3],[3,0],
   ];
-
-  const handleMouseDown = (e) => {
-    mouseRef.current.isDown = true;
-    mouseRef.current.lastX = e.clientX;
-    mouseRef.current.lastY = e.clientY;
-  };
-
-  const handleMouseMove = (e) => {
-    if (mouseRef.current.isDown) {
-      const dx = e.clientX - mouseRef.current.lastX;
-      const dy = e.clientY - mouseRef.current.lastY;
-      rotationRef.current.y += dx * 0.007;
-      rotationRef.current.x += dy * 0.007;
-      mouseRef.current.lastX = e.clientX;
-      mouseRef.current.lastY = e.clientY;
-    }
-  };
-
-  const handleMouseUp = () => { mouseRef.current.isDown = false; };
 
   useEffect(() => {
     let animId;
@@ -297,142 +74,194 @@ function FederatedGraphSim({ height = 400 }) {
     const ctx = canvas.getContext("2d");
 
     const resize = () => {
-      canvas.width = canvas.parentNode.clientWidth * window.devicePixelRatio;
-      canvas.height = height * window.devicePixelRatio;
-      canvas.style.width = "100%";
+      const dpr = window.devicePixelRatio || 1;
+      const W   = canvas.parentNode.clientWidth;
+      canvas.width  = W * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width  = "100%";
       canvas.style.height = `${height}px`;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      ctx.scale(dpr, dpr);
     };
     resize();
     window.addEventListener("resize", resize);
 
-    const particles = [];
-    bankLinks.forEach((link, idx) => {
-      particles.push({
-        linkIdx: idx,
-        progress: Math.random(),
-        speed: 0.005 + Math.random() * 0.006
-      });
-    });
+    const particles = bankLinks.map((_, i) => ({
+      link: i, progress: Math.random(), speed: 0.004 + Math.random() * 0.005,
+    }));
 
     const loop = () => {
-      if (!mouseRef.current.isDown) {
-        rotationRef.current.y += 0.002;
-      }
+      if (!mouseRef.current.down) rotRef.current.y += 0.0018;
 
-      const W = canvas.width / window.devicePixelRatio;
+      const W = canvas.width  / (window.devicePixelRatio || 1);
       const H = height;
-      const cx = W / 2;
-      const cy = H / 2;
-
       ctx.clearRect(0, 0, W, H);
 
-      const projected = bankNodes.map(node => {
-        const cosY = Math.cos(rotationRef.current.y), sinY = Math.sin(rotationRef.current.y);
-        let rx = node.x * cosY - node.z * sinY;
-        let rz = node.z * cosY + node.x * sinY;
+      // Subtle grid
+      ctx.strokeStyle = "rgba(30,58,138,0.07)";
+      ctx.lineWidth = 0.5;
+      for (let x = 0; x < W; x += 50) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+      for (let y = 0; y < H; y += 50) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
 
-        const cosX = Math.cos(rotationRef.current.x), sinX = Math.sin(rotationRef.current.x);
-        let ry = node.y * cosX - rz * sinX;
-        rz = rz * cosX + node.y * sinX;
+      const cx = W / 2, cy = H / 2;
+      const cosY = Math.cos(rotRef.current.y), sinY = Math.sin(rotRef.current.y);
+      const cosX = Math.cos(rotRef.current.x), sinX = Math.sin(rotRef.current.x);
 
-        const scale = 250 / (250 + rz + 100);
-        return { ...node, rx, ry, rz, sx: cx + rx * scale, sy: cy + ry * scale, scale };
+      const proj = bankNodes.map(n => {
+        let rx = n.x * cosY - n.z * sinY;
+        let rz = n.z * cosY + n.x * sinY;
+        let ry = n.y * cosX - rz * sinX;
+        rz     = rz * cosX + n.y * sinX;
+        const sc = 280 / (280 + rz + 80);
+        return { ...n, sx: cx + rx * sc, sy: cy + ry * sc, scale: sc, rz };
       });
 
-      projected.forEach((node, idx) => {
-        bankLinks.forEach(link => {
-          if (link.source === idx) {
-            const other = projected[link.target];
-            ctx.beginPath();
-            ctx.moveTo(node.sx, node.sy);
-            ctx.lineTo(other.sx, other.sy);
-            ctx.strokeStyle = idx === 4 ? "rgba(167, 139, 250, 0.15)" : "rgba(251, 113, 133, 0.08)";
-            ctx.lineWidth = idx === 4 ? 0.8 : 1.2;
-            ctx.stroke();
-          }
-        });
+      // Edges
+      bankLinks.forEach(([si, ti]) => {
+        const a = proj[si], b = proj[ti];
+        const isHub = si === 4 || ti === 4;
+        ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy);
+        ctx.strokeStyle = isHub ? "rgba(192,132,252,0.18)" : "rgba(251,146,60,0.09)";
+        ctx.lineWidth   = isHub ? 0.9 : 1.1;
+        ctx.stroke();
       });
 
+      // Particles
       particles.forEach(p => {
-        const link = bankLinks[p.linkIdx];
-        const sNode = projected[link.source];
-        const tNode = projected[link.target];
-        const px = sNode.sx + (tNode.sx - sNode.sx) * p.progress;
-        const py = sNode.sy + (tNode.sy - sNode.sy) * p.progress;
-        const avgScale = (sNode.scale + tNode.scale) / 2;
-
-        ctx.beginPath();
-        ctx.arc(px, py, 2.2 * avgScale, 0, Math.PI * 2);
-        ctx.fillStyle = link.source === 4 ? "#A78BFA" : "#FB7185";
-        ctx.shadowColor = link.source === 4 ? "#A78BFA" : "#FB7185";
-        ctx.shadowBlur = 6;
+        const [si, ti] = bankLinks[p.link];
+        const a = proj[si], b = proj[ti];
+        const px = a.sx + (b.sx - a.sx) * p.progress;
+        const py = a.sy + (b.sy - a.sy) * p.progress;
+        const sc = (a.scale + b.scale) / 2;
+        const isHub = si === 4 || ti === 4;
+        ctx.beginPath(); ctx.arc(px, py, 2.2 * sc, 0, Math.PI * 2);
+        ctx.fillStyle = isHub ? "#a78bfa" : "#fb7185";
         ctx.fill();
-        ctx.shadowBlur = 0;
-
         p.progress += p.speed;
         if (p.progress > 1) p.progress = 0;
       });
 
-      const sorted = [...projected].sort((a, b) => b.rz - a.rz);
-      sorted.forEach(node => {
-        const r = (node.id === "COOR" ? 10 : 7) * node.scale;
-        
-        ctx.beginPath();
-        ctx.arc(node.sx, node.sy, r, 0, Math.PI * 2);
-        ctx.fillStyle = node.color + "25";
-        ctx.fill();
-
-        ctx.strokeStyle = node.color;
-        ctx.lineWidth = node.id === "COOR" ? 2 : 1.2;
-        ctx.stroke();
-
-        ctx.fillStyle = "rgba(245, 243, 255, 0.7)";
-        ctx.font = "bold 8px Inter";
+      // Nodes (depth-sorted)
+      [...proj].sort((a, b) => b.rz - a.rz).forEach(n => {
+        const r = (n.id === "SMPC" ? 11 : 7) * n.scale;
+        ctx.beginPath(); ctx.arc(n.sx, n.sy, r, 0, Math.PI * 2);
+        ctx.fillStyle   = n.color + "20"; ctx.fill();
+        ctx.strokeStyle = n.color;
+        ctx.lineWidth   = n.id === "SMPC" ? 1.8 : 1.2; ctx.stroke();
+        ctx.fillStyle = "rgba(245,243,255,0.65)";
+        ctx.font      = `600 8px Inter, sans-serif`;
         ctx.textAlign = "center";
-        ctx.fillText(node.id === "COOR" ? "SMPC Coordinator" : node.id, node.sx, node.sy - r - 4);
+        ctx.fillText(n.id === "SMPC" ? "SMPC" : n.id, n.sx, n.sy - r - 5);
       });
 
       animId = requestAnimationFrame(loop);
     };
-
     loop();
-    return () => {
-      cancelAnimationFrame(animId);
-      window.removeEventListener("resize", resize);
-    };
+
+    return () => { cancelAnimationFrame(animId); window.removeEventListener("resize", resize); };
   }, [height]);
 
   return (
     <div
-      className="relative overflow-hidden w-full bg-night/30 rounded-xl"
-      style={{ height }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      className="relative w-full rounded-xl overflow-hidden"
+      style={{ height, background: "radial-gradient(ellipse at 40% 30%, #0d1f3c 0%, #080e1a 70%)" }}
+      onMouseDown={e => { mouseRef.current.down = true; mouseRef.current.lx = e.clientX; mouseRef.current.ly = e.clientY; }}
+      onMouseMove={e => {
+        if (!mouseRef.current.down) return;
+        rotRef.current.y += (e.clientX - mouseRef.current.lx) * 0.007;
+        rotRef.current.x += (e.clientY - mouseRef.current.ly) * 0.007;
+        mouseRef.current.lx = e.clientX; mouseRef.current.ly = e.clientY;
+      }}
+      onMouseUp={()   => { mouseRef.current.down = false; }}
+      onMouseLeave={() => { mouseRef.current.down = false; }}
     >
       <canvas ref={canvasRef} />
     </div>
   );
 }
 
+/* ── Selected node info panel ── */
+function NodePanel({ node }) {
+  if (!node) return null;
+  const col = riskColor(node.risk || 0);
+  const decision = node.risk > 0.85 ? "BLOCK" : node.risk > 0.70 ? "FLAG" : node.risk > 0.40 ? "REVIEW" : "APPROVE";
+
+  return (
+    <div
+      className="mt-3 rounded-xl border p-3 grid grid-cols-2 md:grid-cols-4 gap-3"
+      style={{ background: "rgba(8,14,26,0.7)", borderColor: col + "30" }}
+    >
+      {[
+        { label: "Account ID", value: node.id,                              mono: true },
+        { label: "Risk Score", value: `${Math.round((node.risk || 0) * 100)}%`, mono: true, color: col },
+        { label: "Role",       value: node.role || "member",                mono: false },
+        { label: "Decision",   value: decision,                             mono: true,  color: col },
+      ].map(({ label, value, mono, color }) => (
+        <div key={label}>
+          <p className="text-xs mb-0.5" style={{ color: "rgba(245,243,255,0.35)" }}>{label}</p>
+          <p
+            className={`text-sm ${mono ? "font-mono" : ""} truncate`}
+            style={{ color: color || "rgba(245,243,255,0.8)", fontWeight: color ? 600 : 400 }}
+          >
+            {value}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Stat card ── */
+function StatCard({ label, value, color }) {
+  return (
+    <div className="card py-3 text-center">
+      <p className="text-2xl font-bold font-mono" style={{ color }}>{value}</p>
+      <p className="text-xs mt-0.5" style={{ color: "rgba(245,243,255,0.4)" }}>{label}</p>
+    </div>
+  );
+}
+
+/* ── Tab button ── */
+function Tab({ id, label, active, onClick }) {
+  return (
+    <button
+      onClick={() => onClick(id)}
+      className="px-4 py-2 rounded text-sm font-medium transition-all"
+      style={{
+        background:   active ? "#6d28d9"              : "transparent",
+        color:        active ? "#fff"                 : "rgba(245,243,255,0.45)",
+        boxShadow:    active ? "0 2px 8px #6d28d920"  : "none",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 const TABS = [
-  { id: "network", label: "Network Graph" },
-  { id: "rings", label: "Ring Topology" },
-  { id: "community", label: "Communities" },
-  { id: "federated", label: "Federated Intelligence" },
+  { id: "network",   label: "Network Graph" },
+  { id: "rings",     label: "Ring Topology" },
+  { id: "community", label: "Communities"   },
+  { id: "federated", label: "Federated"     },
+];
+
+/* ── Role legend pill ── */
+const LEGEND = [
+  { label: "Block",    color: "#f87171" },
+  { label: "Flag",     color: "#fb923c" },
+  { label: "Review",   color: "#fbbf24" },
+  { label: "Approve",  color: "#34d399" },
+  { label: "Hub ▲",    color: "#60a5fa" },
+  { label: "Bridge ◆", color: "#60a5fa" },
 ];
 
 export default function GraphView() {
-  const [tab, setTab] = useState("network");
-  const [rings, setRings] = useState([]);
+  const [tab,         setTab]         = useState("network");
+  const [rings,       setRings]       = useState([]);
   const [communities, setCommunities] = useState([]);
-  const [graphData, setGraphData] = useState({ nodes: [], links: [] });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [selected, setSelected] = useState(null);
-  const [selectedRing, setSelectedRing] = useState(null);
+  const [graphData,   setGraphData]   = useState({ nodes: [], links: [] });
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState("");
+  const [selected,    setSelected]    = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
 
   const load = useCallback(async () => {
@@ -442,7 +271,7 @@ export default function GraphView() {
         api.get("/api/rings"),
         api.get("/api/clusters"),
       ]);
-      const fetchedRings = rRes.status === "fulfilled" ? rRes.value.data.rings || [] : [];
+      const fetchedRings       = rRes.status === "fulfilled" ? rRes.value.data.rings    || [] : [];
       const fetchedCommunities = cRes.status === "fulfilled" ? cRes.value.data.clusters || [] : [];
       setRings(fetchedRings);
       setCommunities(fetchedCommunities);
@@ -458,25 +287,30 @@ export default function GraphView() {
   useEffect(() => { load(); }, [load]);
 
   const highRiskRings = rings.filter(r => r.fraud_rate > 0.6);
-  const highRiskComm = communities.filter(c => c.fraud_rate > 0.5);
+  const highRiskComm  = communities.filter(c => c.fraud_rate > 0.5);
 
   return (
     <div className="space-y-5">
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-frost">Graph Intelligence</h1>
-          <p className="text-frost/40 text-sm mt-0.5">
+          <h1 className="text-2xl font-bold" style={{ color: "#f5f3ff" }}>Graph Intelligence</h1>
+          <p className="text-sm mt-0.5" style={{ color: "rgba(245,243,255,0.35)" }}>
             GNN-detected mule rings · Louvain community fraud rates
           </p>
         </div>
         <div className="flex items-center gap-3">
           {lastRefresh && (
-            <span className="text-frost/20 text-xs font-mono">
+            <span className="text-xs font-mono" style={{ color: "rgba(245,243,255,0.2)" }}>
               {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
-          <button onClick={load} disabled={loading} className="btn-outline text-sm flex items-center gap-2 disabled:opacity-50">
+          <button
+            onClick={load}
+            disabled={loading}
+            className="btn-outline text-sm flex items-center gap-2 disabled:opacity-50"
+          >
             <svg className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} viewBox="0 0 14 14" fill="none">
               <path d="M12 7A5 5 0 0 1 2 7M2 7l2-2M2 7l2 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
@@ -485,261 +319,126 @@ export default function GraphView() {
         </div>
       </div>
 
-      {/* Stats bar */}
+      {/* Stats */}
       <div className="grid grid-cols-4 gap-3">
-        {[
-          { label: "Total Rings", value: rings.length, color: "text-orchid" },
-          { label: "High-Risk Rings", value: highRiskRings.length, color: "text-crimson" },
-          { label: "Communities", value: communities.length, color: "text-cyan" },
-          { label: "Nodes Mapped", value: graphData.nodes.length, color: "text-frost" },
-        ].map(({ label, value, color }) => (
-          <div key={label} className="card py-3 text-center">
-            <p className={`text-2xl font-bold font-mono ${color}`}>{value}</p>
-            <p className="text-frost/40 text-xs mt-0.5">{label}</p>
-          </div>
-        ))}
+        <StatCard label="Total Rings"      value={rings.length}            color="#c084fc" />
+        <StatCard label="High-Risk Rings"  value={highRiskRings.length}    color="#f87171" />
+        <StatCard label="Communities"      value={communities.length}      color="#38bdf8" />
+        <StatCard label="Nodes Mapped"     value={graphData.nodes.length}  color="#f5f3ff" />
       </div>
 
       {error && (
-        <div className="bg-amber/8 border border-amber/25 text-amber rounded-xl px-4 py-3 text-sm">
+        <div className="rounded-xl px-4 py-3 text-sm border" style={{ background: "rgba(251,191,36,0.06)", borderColor: "rgba(251,191,36,0.2)", color: "#fbbf24" }}>
           ⚠ {error}
         </div>
       )}
 
       {/* Tab switcher */}
-      <div className="flex gap-1 bg-abyss rounded-lg p-1 w-fit border border-grape/15">
+      <div
+        className="flex gap-1 rounded-lg p-1 w-fit border"
+        style={{ background: "#120824", borderColor: "rgba(109,40,217,0.2)" }}
+      >
         {TABS.map(({ id, label }) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={`px-4 py-2 rounded text-sm font-medium transition-all ${
-              tab === id ? "bg-grape text-white shadow" : "text-frost/50 hover:text-frost"
-            }`}
-          >
-            {label}
-          </button>
+          <Tab key={id} id={id} label={label} active={tab === id} onClick={setTab} />
         ))}
       </div>
 
       {/* Tab content */}
-      <div className="card min-h-[540px]">
+      <div className="card min-h-[560px]">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-64 gap-4">
-            <div className="w-10 h-10 border-2 border-grape/20 border-t-grape rounded-full animate-spin" />
-            <p className="text-frost/30 text-sm">Loading graph data…</p>
+            <div className="w-10 h-10 rounded-full animate-spin border-2" style={{ borderColor: "rgba(109,40,217,0.2)", borderTopColor: "#6d28d9" }} />
+            <p className="text-sm" style={{ color: "rgba(245,243,255,0.3)" }}>Loading graph data…</p>
           </div>
         ) : (
           <>
             {/* ── Network Graph ── */}
             {tab === "network" && (
               <div>
+                {/* Sub-header */}
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-frost/50 text-sm">
+                  <p className="text-sm" style={{ color: "rgba(245,243,255,0.4)" }}>
                     {graphData.nodes.length} nodes · {graphData.links.length} edges
                     {selected && (
-                      <span className="ml-3 text-orchid font-mono">
-                        Selected: {selected.id} ({selected.role})
+                      <span className="ml-3 font-mono" style={{ color: "#c084fc" }}>
+                        · {selected.id} ({selected.role})
                       </span>
                     )}
                   </p>
-                  <div className="flex gap-4 text-[10px] text-frost/30">
-                    <span>◆ Hub/Orchestrator</span>
-                    <span>▲ Bridge</span>
-                    <span>● Mule/Member</span>
+                  {/* Legend */}
+                  <div className="flex gap-3 flex-wrap">
+                    {LEGEND.map(({ label, color }) => (
+                      <div key={label} className="flex items-center gap-1.5">
+                        <div className="w-2 h-2 rounded-full" style={{ background: color }} />
+                        <span className="text-xs" style={{ color: "rgba(245,243,255,0.4)" }}>{label}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
+                {/* Hint */}
+                <p className="text-xs mb-2" style={{ color: "rgba(245,243,255,0.2)" }}>
+                  Scroll to zoom · Drag to pan · Click node to inspect
+                </p>
+
                 {graphData.nodes.length > 0 ? (
-                  <NetworkCanvas
-                    nodes={graphData.nodes}
-                    links={graphData.links}
-                    onNodeClick={setSelected}
-                    height={460}
-                  />
+                  <>
+                    <NetworkGraph
+                      nodes={graphData.nodes}
+                      links={graphData.links}
+                      onNodeClick={setSelected}
+                      height={460}
+                    />
+                    <NodePanel node={selected} />
+                  </>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-64 text-center">
                     <div className="text-5xl mb-4 opacity-20">🕸️</div>
-                    <p className="text-frost/30 text-sm">No ring data yet.</p>
-                    <p className="text-frost/20 text-xs mt-1">Run <code className="text-orchid">training/run_all.py</code> to detect rings.</p>
-                  </div>
-                )}
-
-                {selected && (
-                  <div className="mt-3 grid grid-cols-4 gap-3 bg-night/60 rounded-xl border border-grape/20 p-3 text-sm">
-                    {[
-                      { label: "Account", value: selected.id },
-                      { label: "Risk Score", value: `${Math.round((selected.risk || 0) * 100)}` },
-                      { label: "Role", value: selected.role || "member" },
-                      { label: "Ring", value: selected.ring_id ? selected.ring_id.slice(0, 20) + "…" : "None" },
-                    ].map(({ label, value }) => (
-                      <div key={label}>
-                        <p className="text-frost/30 text-xs mb-0.5">{label}</p>
-                        <p className="text-frost/80 font-mono text-xs">{value}</p>
-                      </div>
-                    ))}
+                    <p className="text-sm" style={{ color: "rgba(245,243,255,0.3)" }}>No ring data yet.</p>
+                    <p className="text-xs mt-1" style={{ color: "rgba(245,243,255,0.2)" }}>
+                      Run <code style={{ color: "#c084fc" }}>training/run_all.py</code> to detect rings.
+                    </p>
                   </div>
                 )}
               </div>
             )}
 
             {/* ── Ring Topology ── */}
-            {tab === "rings" && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* Ring list */}
-                <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
-                  {rings.length === 0 && (
-                    <div className="text-center py-12">
-                      <div className="text-4xl mb-2 opacity-20">🕸️</div>
-                      <p className="text-frost/30 text-sm">No rings detected. Train the model first.</p>
-                    </div>
-                  )}
-                  {rings.map(ring => {
-                    const shapeStyle = SHAPE_COLORS[ring.shape] || SHAPE_COLORS.CLUSTER;
-                    const isSelected = selectedRing?.ring_id === ring.ring_id;
-                    return (
-                      <div
-                        key={ring.ring_id}
-                        onClick={() => setSelectedRing(ring)}
-                        className={`p-4 rounded-xl border cursor-pointer transition-all duration-150 ${
-                          isSelected ? "border-grape/60 bg-grape/8" : "border-grape/15 bg-abyss/40 hover:border-grape/30"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between mb-2">
-                          <div>
-                            <span className={`text-[10px] font-bold font-mono px-1.5 py-0.5 rounded border ${shapeStyle}`}>
-                              {ring.shape}
-                            </span>
-                            <p className="text-frost/70 font-mono text-xs mt-1 truncate max-w-[180px]">{ring.ring_id}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className={`font-bold font-mono ${ring.fraud_rate > 0.5 ? "text-crimson" : "text-amber"}`}>
-                              {(ring.fraud_rate * 100).toFixed(0)}%
-                            </p>
-                            <p className="text-frost/30 text-[10px]">{ring.size || ring.accounts?.length} accounts</p>
-                          </div>
-                        </div>
-                        <div className="flex gap-1 flex-wrap">
-                          {Object.entries(ring.roles || {}).slice(0, 6).map(([acct, role]) => (
-                            <span key={acct} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-grape/10 text-orchid/60 border border-grape/15">
-                              {role}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Ring detail */}
-                <div>
-                  {selectedRing ? (
-                    <div className="card space-y-4">
-                      <div>
-                        <span className={`text-xs font-bold font-mono px-2 py-0.5 rounded border ${SHAPE_COLORS[selectedRing.shape] || ""}`}>
-                          {selectedRing.shape} RING
-                        </span>
-                        <p className="text-frost/50 font-mono text-xs mt-1">{selectedRing.ring_id}</p>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 text-center">
-                        {[
-                          { l: "Size", v: selectedRing.size || selectedRing.accounts?.length },
-                          { l: "Fraud Rate", v: `${(selectedRing.fraud_rate * 100).toFixed(1)}%` },
-                          { l: "Confidence", v: `${(selectedRing.confidence * 100).toFixed(0)}%` },
-                        ].map(({ l, v }) => (
-                          <div key={l} className="bg-night/60 rounded-lg p-2">
-                            <p className="font-mono font-bold text-sm text-frost/80">{v}</p>
-                            <p className="text-frost/30 text-[10px]">{l}</p>
-                          </div>
-                        ))}
-                      </div>
-                      <div>
-                        <p className="text-frost/40 text-xs uppercase tracking-wider mb-2">Member Roles</p>
-                        <div className="space-y-1 max-h-48 overflow-y-auto">
-                          {Object.entries(selectedRing.roles || {}).map(([acct, role]) => (
-                            <div key={acct} className="flex items-center gap-2 text-xs py-1 border-b border-grape/8 last:border-0">
-                              <span className="text-frost/60 font-mono truncate flex-1">{acct}</span>
-                              <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${
-                                role === "hub" || role === "orchestrator"
-                                  ? "bg-crimson/15 text-crimson"
-                                  : role === "bridge"
-                                  ? "bg-amber/15 text-amber"
-                                  : "bg-grape/10 text-orchid/70"
-                              }`}>{role}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      {selectedRing.hub_node && (
-                        <div className="bg-crimson/8 border border-crimson/20 rounded-lg p-2 text-xs">
-                          <span className="text-crimson font-medium">Hub: </span>
-                          <span className="text-frost/60 font-mono">{selectedRing.hub_node}</span>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="card flex items-center justify-center h-48 text-frost/30 text-sm">
-                      Click a ring to inspect roles
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+            {tab === "rings" && <RingViewer rings={rings} />}
 
             {/* ── Communities ── */}
-            {tab === "community" && (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                <div className="lg:col-span-2">
-                  <div className="flex items-center justify-between mb-4">
-                    <p className="text-frost/50 text-sm">Louvain community fraud rates — sorted by risk</p>
-                    <div className="flex gap-3 text-xs text-frost/30">
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-crimson inline-block" /> &gt;50%</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber inline-block" /> 20-50%</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-jade inline-block" /> &lt;20%</span>
-                    </div>
-                  </div>
-                  <CommunitySummary communities={communities} />
-                </div>
-                <div className="space-y-3">
-                  {[
-                    { label: "High-Risk (&gt;50%)", value: highRiskComm.length, color: "text-crimson" },
-                    { label: "Total communities", value: communities.length, color: "text-orchid" },
-                    { label: "Total accounts", value: communities.reduce((s, c) => s + c.size, 0).toLocaleString(), color: "text-frost" },
-                  ].map(({ label, value, color }) => (
-                    <div key={label} className="card py-4 text-center">
-                      <p className={`text-2xl font-bold font-mono ${color}`}>{value}</p>
-                      <p className="text-frost/40 text-xs mt-0.5" dangerouslySetInnerHTML={{ __html: label }} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {tab === "community" && <CommunityView communities={communities} />}
 
             {/* ── Federated Intelligence ── */}
             {tab === "federated" && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
                 <div className="lg:col-span-2">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-frost/50 text-sm">Cross-Bank Federated Graph simulation — Secure SMPC weight exchange</p>
-                  </div>
+                  <p className="text-sm mb-3" style={{ color: "rgba(245,243,255,0.4)" }}>
+                    Cross-bank federated GNN — drag to rotate · Secure SMPC weight exchange
+                  </p>
                   <FederatedGraphSim height={420} />
                 </div>
                 <div className="space-y-4">
                   <div className="card space-y-3">
-                    <h3 className="text-frost/70 font-semibold text-xs uppercase tracking-wider font-mono">Cross-Bank SMURFIng Loop</h3>
-                    <p className="text-frost/40 text-xs leading-normal">
-                      A single bank only sees a subset of nodes. By computing homomorphic GNN embeddings across SBI, HDFC, and ICICI, we trace cyclic flows that pass-through bank boundaries before cashing out.
+                    <h3 className="text-xs font-semibold uppercase tracking-wider font-mono" style={{ color: "rgba(245,243,255,0.5)" }}>
+                      Cross-Bank SMURFing Loop
+                    </h3>
+                    <p className="text-xs leading-relaxed" style={{ color: "rgba(245,243,255,0.4)" }}>
+                      A single bank sees only its own nodes. Homomorphic GNN embeddings across SBI, HDFC, and ICICI expose cyclic flows that span bank boundaries before cash-out.
                     </p>
-                    <div className="p-3 bg-night/50 border border-grape/10 rounded-lg text-[10px] font-mono text-orchid/80 space-y-1.5">
-                      <p>🏦 SBI → HDFC (Transfer ₹49,900)</p>
-                      <p>🏦 HDFC → ICICI (Transfer ₹49,500)</p>
-                      <p>🏦 ICICI → SBI (ATM Withdrawal)</p>
-                      <p className="text-crimson font-bold">⚠️ CROSS-BANK GNN ALERT: Cycle detected!</p>
+                    <div className="p-3 rounded-lg text-xs font-mono space-y-1.5" style={{ background: "rgba(8,14,26,0.5)", border: "1px solid rgba(109,40,217,0.15)", color: "#c084fc" }}>
+                      <p>🏦 SBI → HDFC  ₹49,900</p>
+                      <p>🏦 HDFC → ICICI ₹49,500</p>
+                      <p>🏦 ICICI → SBI  ATM withdrawal</p>
+                      <p className="font-bold" style={{ color: "#f87171" }}>⚠ Cross-bank cycle detected</p>
                     </div>
                   </div>
                   <div className="card text-center py-6">
-                    <p className="text-frost/30 text-xs font-mono mb-2 uppercase tracking-wide">Privacy Level</p>
-                    <p className="text-3xl font-bold font-mono text-jade">100% SECURE</p>
-                    <p className="text-frost/40 text-xs mt-1.5 max-w-xs mx-auto leading-normal">Zero raw customer datasets are shared. Only encrypted neural network model gradients are synchronized.</p>
+                    <p className="text-xs font-mono mb-2 uppercase tracking-wide" style={{ color: "rgba(245,243,255,0.3)" }}>Privacy level</p>
+                    <p className="text-3xl font-bold font-mono" style={{ color: "#34d399" }}>100%</p>
+                    <p className="text-xs mt-1 leading-relaxed max-w-xs mx-auto" style={{ color: "rgba(245,243,255,0.4)" }}>
+                      No raw customer data shared. Only encrypted neural-network gradients are exchanged.
+                    </p>
                   </div>
                 </div>
               </div>

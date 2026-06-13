@@ -4,7 +4,7 @@
 export async function collectDeviceSignal() {
   const signals = {};
 
-  // Canvas fingerprint
+  // 1. Canvas fingerprint
   try {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
@@ -14,31 +14,38 @@ export async function collectDeviceSignal() {
     ctx.fillText("Nyxara🔮BEI", 2, 2);
     ctx.fillStyle = "rgba(192,132,252,0.5)";
     ctx.fillRect(50, 1, 62, 20);
-    signals.canvas_fp = canvas.toDataURL().slice(-32);
-  } catch {}
+    signals.canvas_hash = canvas.toDataURL().slice(-32);
+  } catch {
+    signals.canvas_hash = "";
+  }
 
-  // WebGL renderer
+  // 2. WebGL renderer
   try {
     const gl = document.createElement("canvas").getContext("webgl");
     const ext = gl?.getExtension("WEBGL_debug_renderer_info");
     if (ext) {
-      signals.webgl_renderer = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
-      signals.webgl_vendor = gl.getParameter(ext.UNMASKED_VENDOR_WEBGL);
+      signals.webgl = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || "";
+    } else {
+      signals.webgl = "";
     }
-  } catch {}
+  } catch {
+    signals.webgl = "";
+  }
 
-  // Screen & timezone
-  signals.screen_width = window.screen.width;
-  signals.screen_height = window.screen.height;
-  signals.screen_color_depth = window.screen.colorDepth;
-  signals.pixel_ratio = window.devicePixelRatio;
-  signals.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  signals.language = navigator.language;
-  signals.platform = navigator.platform;
-  signals.cookie_enabled = navigator.cookieEnabled;
-  signals.do_not_track = navigator.doNotTrack;
+  // 3. Screen parameters (nested)
+  signals.screen = {
+    width: window.screen.width,
+    height: window.screen.height,
+    color_depth: window.screen.colorDepth,
+    pixel_ratio: window.devicePixelRatio,
+  };
 
-  // Audio fingerprint
+  // 4. Timezone, language, user agent
+  signals.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  signals.language = navigator.language || "";
+  signals.user_agent = navigator.userAgent || "";
+
+  // 5. Audio fingerprint
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (AudioCtx) {
@@ -50,21 +57,66 @@ export async function collectDeviceSignal() {
       oscillator.start(0);
       const data = new Float32Array(analyser.frequencyBinCount);
       analyser.getFloatFrequencyData(data);
-      signals.audio_fp = data.slice(0, 32).reduce((a, b) => a + b, 0).toFixed(6);
+      signals.audio_hash = data.slice(0, 32).reduce((a, b) => a + b, 0).toFixed(6);
       oscillator.stop();
       ac.close();
+    } else {
+      signals.audio_hash = "";
     }
-  } catch {}
+  } catch {
+    signals.audio_hash = "";
+  }
 
-  // Touch & connection
-  signals.max_touch_points = navigator.maxTouchPoints;
-  signals.connection_type = navigator.connection?.effectiveType || "unknown";
-  signals.hardware_concurrency = navigator.hardwareConcurrency;
-  signals.device_memory = navigator.deviceMemory;
+  // 6. IP & JA3
+  signals.ip = "127.0.0.1"; // Backend overrides this
+  signals.ja3_hash = null;
 
-  // Session timing (behavioral signal)
-  signals.session_start = Date.now();
-  signals.user_agent_hash = await hashString(navigator.userAgent);
+  // 7. Behavioral biometrics (real/simulated)
+  const simMode = window.__nyxara_sim_mode || null;
+  
+  let keystroke_intervals_ms = [];
+  let mouse_coordinates = [];
+  let event_count = 0;
+  let session_duration_seconds = 5.0;
+  let form_fill_seconds = null;
+
+  if (simMode === "bot") {
+    keystroke_intervals_ms = [150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0];
+    mouse_coordinates = [];
+    for (let i = 0; i < 30; i++) {
+      mouse_coordinates.push([100 + i * 10, 100 + i * 10]);
+    }
+    event_count = 120;
+    session_duration_seconds = 1.5;
+    form_fill_seconds = 1.2;
+  } else if (simMode === "rat") {
+    keystroke_intervals_ms = [120.0, 540.0, 210.0, 890.0, 150.0, 720.0, 310.0, 940.0];
+    mouse_coordinates = [];
+    for (let i = 0; i < 30; i++) {
+      mouse_coordinates.push([Math.round(Math.random() * 800), Math.round(Math.random() * 600)]);
+    }
+    event_count = 180;
+    session_duration_seconds = 2.0;
+    form_fill_seconds = 10.0;
+  } else {
+    if (window.__nyxara_key_timings && window.__nyxara_key_timings.length > 1) {
+      const timings = window.__nyxara_key_timings;
+      for (let i = 1; i < timings.length; i++) {
+        keystroke_intervals_ms.push(timings[i] - timings[i - 1]);
+      }
+    }
+    if (window.__nyxara_mouse_history) {
+      mouse_coordinates = window.__nyxara_mouse_history.map(pt => [Math.round(pt.x), Math.round(pt.y)]);
+    }
+    event_count = keystroke_intervals_ms.length + mouse_coordinates.length;
+    session_duration_seconds = Math.max(1.0, (Date.now() - (window.__nyxara_session_start || Date.now())) / 1000);
+  }
+
+  signals.keystroke_intervals_ms = keystroke_intervals_ms;
+  signals.mouse_coordinates = mouse_coordinates;
+  signals.event_count = event_count;
+  signals.session_duration_seconds = parseFloat(session_duration_seconds.toFixed(2));
+  signals.form_fill_seconds = form_fill_seconds;
 
   return signals;
 }

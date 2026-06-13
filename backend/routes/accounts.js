@@ -31,7 +31,11 @@ router.post("/analyze", async (req, res, next) => {
     // Steps 4 & 5: Parallel AI + Cyber scoring
     const [aiResult, cyberResult] = await Promise.all([
       aiService.score({ account_id: accountId, ...features }),
-      cyberService.scoreDevice(deviceSignal || {}),
+      cyberService.scoreDevice({
+        ...(deviceSignal || {}),
+        account_id: accountId,
+        ip: req.ip || req.headers["x-forwarded-for"] || "127.0.0.1",
+      }),
     ]);
 
     // Step 7: Risk fusion already done in AI engine (includes BEI weight)
@@ -50,6 +54,7 @@ router.post("/analyze", async (req, res, next) => {
         beiScore:        cyberResult.bei_risk_score || 0,
         graphScore:      aiResult.graph_score,
         ringMembership:  aiResult.ring_membership,
+        communityFraudRate: aiResult.community_fraud_rate || 0,
         shap:            aiResult.shap_factors,
         alertText:       aiResult.alert_text,
         overrideApplied: aiResult.override_applied,

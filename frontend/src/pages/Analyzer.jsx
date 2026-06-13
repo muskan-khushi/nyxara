@@ -617,11 +617,22 @@ function BiometricsHUD() {
   const keyTimings = useRef([]);
   const sweepAngle = useRef(0);
 
+  // Track session start
+  useEffect(() => {
+    if (!window.__nyxara_session_start) window.__nyxara_session_start = Date.now();
+  }, []);
+
+  // Sync simulation mode
+  useEffect(() => {
+    window.__nyxara_sim_mode = simMode;
+  }, [simMode]);
+
   // Track keystrokes
   useEffect(() => {
     const handleKeyDown = () => {
       keyTimings.current.push(Date.now());
       if (keyTimings.current.length > 20) keyTimings.current.shift();
+      window.__nyxara_key_timings = [...keyTimings.current];
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -635,6 +646,7 @@ function BiometricsHUD() {
       setCoords({ x: e.clientX, y: e.clientY });
       mouseHistory.current.push({ x: e.clientX, y: e.clientY, ts: Date.now() });
       if (mouseHistory.current.length > 50) mouseHistory.current.shift();
+      window.__nyxara_mouse_history = [...mouseHistory.current];
     };
     window.addEventListener("mousemove", handleMouseMove);
     return () => window.removeEventListener("mousemove", handleMouseMove);
