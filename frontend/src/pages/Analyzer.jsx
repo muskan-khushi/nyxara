@@ -228,11 +228,11 @@ function Gnn3DGraph({ accountId, ringMembership, finalRisk, height = 280 }) {
   const mouseRef = useRef({ x: -100, y: -100, isDown: false, lastX: 0, lastY: 0 });
   const rotationRef = useRef({ x: 0.3, y: 0.4 });
 
-  // Generate nodes once
   const nodesRef = useRef([]);
   const linksRef = useRef([]);
 
-  if (!nodesRef.current.length) {
+  // Re-generate nodes and links whenever props change
+  useEffect(() => {
     const nodes = [];
     const links = [];
     
@@ -264,7 +264,7 @@ function Gnn3DGraph({ accountId, ringMembership, finalRisk, height = 280 }) {
     }
     nodesRef.current = nodes;
     linksRef.current = links;
-  }
+  }, [accountId, ringMembership, finalRisk]);
 
   const handleMouseDown = (e) => {
     mouseRef.current.isDown = true;

@@ -25,7 +25,7 @@ export function AlertProvider({ children }) {
     const token = localStorage.getItem("nyxara_token");
     if (!token) return;
 
-    const socket = io(`${WS_URL}/alerts`, {
+    const socket = io(WS_URL, {
       auth: { token },
       transports: ["websocket"],
       reconnectionAttempts: 5,
