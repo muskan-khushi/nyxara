@@ -3,6 +3,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import { io } from "socket.io-client";
 import api from "../services/api";
 import { useAuth } from "./AuthContext";
+import { getMockLiveAlert } from "../services/mockData";
 
 const AlertContext = createContext(null);
 export const useAlerts = () => useContext(AlertContext);
@@ -39,9 +40,26 @@ export function AlertProvider({ children }) {
       reconnectionDelay: 2000,
     });
 
+    let fallbackInterval = null;
+
     socket.on("connect", () => setConnected(true));
     socket.on("disconnect", () => setConnected(false));
-    socket.on("connect_error", () => setConnected(false));
+    socket.on("connect_error", () => {
+      setConnected(false);
+      console.warn("[Offline Fallback] WebSocket failed, starting mock live alerts");
+      if (!fallbackInterval) {
+        fallbackInterval = setInterval(() => {
+          const alert = getMockLiveAlert();
+          setAlerts(prev => [alert, ...prev.filter(a => (a.alertId || a._id) !== alert.alertId)]);
+          if (Notification.permission === "granted" && alert.decision === "BLOCK") {
+            new Notification(`Nyxara: BLOCK — ${alert.accountId}`, {
+              body: `Risk score: ${Math.round((alert.riskScore || 0) * 100)}`,
+              icon: "/nyxara-logo.svg",
+            });
+          }
+        }, 15000); // every 15s
+      }
+    });
 
     socket.on("new_alert", alert => {
       const normalized = {
@@ -69,7 +87,10 @@ export function AlertProvider({ children }) {
     // Request notification permission
     if (Notification.permission === "default") Notification.requestPermission();
 
-    return () => { socket.disconnect(); };
+    return () => { 
+      socket.disconnect(); 
+      if (fallbackInterval) clearInterval(fallbackInterval);
+    };
   }, [user]);
 
   const addAlert = useCallback(alert => {
