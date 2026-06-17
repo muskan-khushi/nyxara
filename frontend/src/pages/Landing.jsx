@@ -217,7 +217,7 @@ export default function Landing() {
               </svg>
             </div>
             <span className="text-lg font-bold">Nyx<span className="text-orchid">ara</span></span>
-            <span className="text-[10px] font-mono text-grape/60 border border-grape/30 rounded px-1.5 py-0.5">v1.0</span>
+            
           </div>
           <div className="hidden md:flex items-center gap-8 text-sm text-frost/60">
             <a href="#detection" className="hover:text-frost transition-colors">Detection</a>
@@ -239,11 +239,7 @@ export default function Landing() {
         {/* Hero content */}
         <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-center px-6 py-16">
           {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-grape/30 
-                          bg-grape/10 text-xs text-orchid mb-8">
-            <span className="w-1.5 h-1.5 rounded-full bg-orchid animate-pulse" />
-            Aligned with I4C-RBIH MoU · May 2026 · National Hackathon
-          </div>
+          
 
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 leading-tight max-w-4xl">
             Where others see{" "}

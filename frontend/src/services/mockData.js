@@ -25,10 +25,21 @@ export const mockEndpoints = {
   "/api/accounts/analyze": {
     data: { 
       result: { 
-        accountId: "acc_new_demo", 
-        riskScore: 0.98, 
+        accountId: "ACC-MOCK-DEMO", 
+        finalRisk: 0.98, 
         decision: "BLOCK", 
         riskFactors: ["Rapid Transfer", "Known Fraud Entity"],
+        ringMembership: true,
+        scores: { gnn: 0.96, ensemble: 0.94, vae: 0.88, bei: 0.72, graph: 0.99 },
+        shap: [
+          { feature: "F3836_Avg_Txn", shap_value: 0.42, raw_value: 450000 },
+          { feature: "F3894_Velocity", shap_value: 0.38, raw_value: 85 },
+          { feature: "F527_PassThrough", shap_value: 0.31, raw_value: 0.94 },
+          { feature: "F1692_LinkedDevices", shap_value: 0.25, raw_value: 6 },
+          { feature: "F3891_Occupation", shap_value: 0.18, raw_value: "student" },
+          { feature: "F2956_Nocturnal", shap_value: 0.15, raw_value: 0.45 },
+          { feature: "F3043_AccountAge", shap_value: -0.05, raw_value: 25 }
+        ],
         graphData: { nodes: [], edges: [] }
       } 
     }
@@ -36,14 +47,35 @@ export const mockEndpoints = {
   "/api/rings": {
     data: { 
       rings: [
-        { id: "ring_1", entities: ["acc_10", "acc_21", "acc_33"], totalVolume: 145000, riskScore: 0.96 }
+        { 
+          ring_id: "ring_smurf_01", 
+          accounts: ["acc_101", "acc_102", "acc_103", "acc_104", "hub_master_1"], 
+          fraud_rate: 0.96,
+          shape: "STAR",
+          hub_node: "hub_master_1",
+          roles: { "hub_master_1": "hub", "acc_101": "mule", "acc_102": "mule", "acc_103": "mule", "acc_104": "mule" }
+        },
+        { 
+          ring_id: "ring_cycle_02", 
+          accounts: ["cyc_1", "cyc_2", "cyc_3", "cyc_4"], 
+          fraud_rate: 0.88,
+          shape: "CYCLE"
+        },
+        { 
+          ring_id: "ring_chain_03", 
+          accounts: ["chn_1", "chn_2", "chn_3"], 
+          fraud_rate: 0.75,
+          shape: "CHAIN"
+        }
       ] 
     }
   },
   "/api/clusters": {
     data: { 
       clusters: [
-        { id: "cluster_1", nodeCount: 12, edgeCount: 38, density: 0.85, risk: "HIGH" }
+        { cluster_id: "comm_01", node_count: 24, edge_count: 58, fraud_rate: 0.85 },
+        { cluster_id: "comm_02", node_count: 12, edge_count: 18, fraud_rate: 0.42 },
+        { cluster_id: "comm_03", node_count: 45, edge_count: 112, fraud_rate: 0.92 }
       ] 
     }
   },
@@ -65,14 +97,30 @@ export const getMockResponse = (url) => {
     return { data: { success: true } };
   }
   if (url.includes("/api/compliance/str/")) {
-    return { data: { title: "STR-DEMO-001", details: "Suspicious pattern detected matching money laundering typology." } };
+    return { 
+      data: { 
+        reporting_entity: "Nyxara FinSec Platform",
+        firc_code: "FIRC-IND-8002",
+        account_id: "ACC-MOCK-DEMO",
+        customer_occupation: "Student",
+        account_type: "Savings",
+        str_type: "mule_network",
+        risk_score: 0.94,
+        observation_period: "Last 90 Days",
+        nature_of_suspicion: "Coordinated smurfing activity detected. High pass-through ratio and nocturnal transaction surges align with AI typologies for mule networking.",
+        risk_indicators: ["High Velocity", "Synthetic Identity", "Pass-Through Ratio"],
+        amount_involved: "₹1,45,000",
+        audit_hash: "0x8f3c7a2b9d0e11a123f1",
+        generated_at: new Date().toLocaleString()
+      } 
+    };
   }
   if (url.includes("/api/compliance/audit/")) {
     return { 
       data: { 
-        logs: [
-          { action: "SYSTEM_FLAG", timestamp: new Date(Date.now() - 86400000).toISOString(), user: "AI Engine", details: "Risk exceeded 0.8" },
-          { action: "REVIEW", timestamp: new Date().toISOString(), user: "Demo Admin", details: "Manual review initiated." }
+        entries: [
+          { decision: "BLOCK", accountId: "ACC-MOCK-DEMO", riskScore: 0.94, timestamp: new Date().toISOString(), decisionHash: "0x4e2d...a1", merkleLeafHash: "0x98bb...c3", blockchainBatchId: "BATCH-891" },
+          { decision: "FLAG", accountId: "ACC-MOCK-DEMO", riskScore: 0.72, timestamp: new Date(Date.now() - 86400000).toISOString(), decisionHash: "0x2a1b...d9", merkleLeafHash: "0x77aa...e2" }
         ] 
       } 
     };
