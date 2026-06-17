@@ -143,7 +143,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
         {!collapsed && (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/5 shadow-inner backdrop-blur-sm">
             <span className="w-1.5 h-1.5 rounded-full bg-jade shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse flex-shrink-0" />
-            <span className="text-frost/60 text-[10px] font-mono tracking-wide">SYSTEM <span className="text-jade font-bold">ONLINE</span></span>
+            {/* <span className="text-frost/60 text-[10px] font-mono tracking-wide">SYSTEM <span className="text-jade font-bold">ONLINE</span></span> */}
           </div>
         )}
 

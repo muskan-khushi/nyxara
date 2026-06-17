@@ -62,7 +62,7 @@ export default function Navbar() {
         {/* WS status */}
         <div className="hidden sm:flex items-center gap-1.5" title={wsConnected ? "WebSocket connected" : "WebSocket disconnected"}>
           <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-jade animate-pulse" : "bg-crimson"}`} />
-          <span className="text-frost/30 text-[10px] font-mono">{wsConnected ? "Live" : "Offline"}</span>
+          {/* <span className="text-frost/30 text-[10px] font-mono">{wsConnected ? "Live" : "Offline"}</span> */}
         </div>
 
         {/* Alert badge */}
