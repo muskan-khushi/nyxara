@@ -15,6 +15,9 @@ import GraphView from "./pages/GraphView";
 import Alerts from "./pages/Alerts";
 import Compliance from "./pages/Compliance";
 import Metrics from "./pages/Metrics";
+import AttackReplay from "./pages/AttackReplay";
+import RiskAtlas from "./pages/RiskAtlas";
+import CockpitHUD from "./pages/CockpitHUD";
 
 /* ── Auth guard ── */
 function PrivateRoute({ children }) {
@@ -27,12 +30,18 @@ function AppShell({ children }) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="flex h-screen bg-night overflow-hidden">
+    <div className="flex h-screen bg-night overflow-hidden relative">
+      {/* Premium ambient glow orbs */}
+      <div className="absolute top-[-10%] left-[-5%] w-[40%] h-[40%] rounded-full bg-grape/10 blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-5%] w-[40%] h-[40%] rounded-full bg-cyan/5 blur-[120px] pointer-events-none" />
+
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
         <Navbar />
         <main className="flex-1 overflow-y-auto p-5 lg:p-6">
-          {children}
+          <div className="animate-fade-in-up">
+            {children}
+          </div>
         </main>
       </div>
     </div>
@@ -78,6 +87,21 @@ export default function App() {
           <Route path="/metrics" element={
             <PrivateRoute>
               <AppShell><Metrics /></AppShell>
+            </PrivateRoute>
+          } />
+          <Route path="/replay" element={
+            <PrivateRoute>
+              <AppShell><AttackReplay /></AppShell>
+            </PrivateRoute>
+          } />
+          <Route path="/atlas" element={
+            <PrivateRoute>
+              <AppShell><RiskAtlas /></AppShell>
+            </PrivateRoute>
+          } />
+          <Route path="/cockpit" element={
+            <PrivateRoute>
+              <AppShell><CockpitHUD /></AppShell>
             </PrivateRoute>
           } />
 

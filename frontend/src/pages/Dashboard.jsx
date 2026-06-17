@@ -228,16 +228,16 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between animate-slide-up">
         <div>
-          <h1 className="text-2xl font-bold text-frost">Command Center</h1>
-          <p className="text-frost/40 text-sm mt-0.5">Real-time mule account detection — live intelligence feed</p>
+          <h1 className="text-3xl font-display font-bold text-white tracking-tight">Command Center</h1>
+          <p className="text-frost/40 text-sm mt-1 font-medium">Real-time mule account detection — live intelligence feed</p>
         </div>
         <button
           onClick={() => navigate("/analyzer")}
-          className="btn-primary text-sm flex items-center gap-2"
+          className="btn-primary text-sm"
         >
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <svg width="16" height="16" viewBox="0 0 14 14" fill="none">
             <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.5"/>
             <path d="M9 9L12 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
           </svg>
@@ -246,38 +246,38 @@ export default function Dashboard() {
       </div>
 
       {/* Stat cards row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 animate-slide-up delay-100">
         <StatCard
           label="Total Analyzed"
           value={(counts.total || 0).toLocaleString()}
           sub="Accounts in system"
-          color="text-frost"
+          color="text-white"
           sparkData={[20, 35, 28, 42, 51, 39, 58, 47, 63, 71]}
         />
         <StatCard
           label="Blocked"
           value={(counts.blocked || 0).toLocaleString()}
           sub="Immediate freeze"
-          color="text-crimson"
+          color="text-crimson text-shadow-[0_0_15px_rgba(225,29,72,0.4)]"
           trend={12}
         />
         <StatCard
           label="Flagged"
           value={(counts.flagged || 0).toLocaleString()}
           sub="Priority review"
-          color="text-orange-400"
+          color="text-orange text-shadow-[0_0_15px_rgba(249,115,22,0.4)]"
           trend={5}
         />
         <StatCard
           label="Under Review"
           value={(counts.review || 0).toLocaleString()}
           sub="Analyst queue"
-          color="text-amber"
+          color="text-amber text-shadow-[0_0_15px_rgba(245,158,11,0.4)]"
         />
       </div>
 
       {/* Middle row: Gauge + Model perf + Risk dist */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 animate-slide-up delay-200">
         {/* Latest account gauge */}
         <div className="card flex flex-col items-center justify-center gap-2 py-6">
           <p className="text-frost/40 text-xs uppercase tracking-wider font-medium">Latest Analyzed</p>
@@ -331,32 +331,32 @@ export default function Dashboard() {
       </div>
 
       {/* Bottom row: Alerts + Occupation matrix */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 animate-slide-up delay-300">
         {/* Live alerts */}
         <div className="xl:col-span-2 card">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-crimson animate-pulse" />
-              <span className="text-frost/70 font-semibold text-sm">Live Alert Feed</span>
+              <span className="w-2.5 h-2.5 rounded-full bg-crimson animate-pulse shadow-[0_0_10px_rgba(225,29,72,0.8)]" />
+              <span className="text-white font-display font-semibold text-base tracking-tight">Live Alert Feed</span>
               {alerts.filter(a => !a.analystAction).length > 0 && (
-                <span className="bg-crimson text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                  {alerts.filter(a => !a.analystAction).length}
+                <span className="bg-gradient-to-r from-crimson to-orange text-white text-[10px] font-bold px-2 py-0.5 rounded-md ml-2 shadow-[0_0_8px_rgba(225,29,72,0.4)]">
+                  {alerts.filter(a => !a.analystAction).length} NEW
                 </span>
               )}
             </div>
-            <button onClick={() => navigate("/alerts")} className="text-xs text-orchid/60 hover:text-orchid transition-colors">
+            <button onClick={() => navigate("/alerts")} className="text-xs font-semibold text-orchid hover:text-white transition-colors bg-white/5 px-3 py-1.5 rounded-lg border border-white/5 hover:border-orchid/30">
               View all →
             </button>
           </div>
 
           {recentAlerts.length === 0 ? (
-            <div className="text-center py-10">
-              <div className="text-3xl mb-2 opacity-20">📡</div>
-              <p className="text-frost/30 text-sm">No live alerts yet.</p>
-              <p className="text-frost/20 text-xs mt-1">Analyze accounts to populate this feed.</p>
+            <div className="text-center py-12 bg-black/20 rounded-xl border border-white/5">
+              <div className="text-4xl mb-3 opacity-20 filter grayscale">📡</div>
+              <p className="text-white text-sm font-medium">No live alerts currently.</p>
+              <p className="text-frost/40 text-xs mt-1">System is actively monitoring all traffic.</p>
             </div>
           ) : (
-            <div className="divide-y divide-grape/8">
+            <div className="divide-y divide-white/5">
               {recentAlerts.map((a, i) => <AlertRow key={a.alertId || i} alert={a} />)}
             </div>
           )}
@@ -364,31 +364,38 @@ export default function Dashboard() {
 
         {/* Occupation matrix */}
         <div className="card">
-          <p className="text-frost/70 font-semibold text-sm mb-4">
-            Occupation × Velocity Risk
+          <p className="text-white font-display font-semibold text-base tracking-tight mb-4 flex items-center gap-2">
+            <span className="text-jade">⌘</span> Occupation × Velocity
           </p>
-          <OccupationMini />
-          <p className="text-frost/20 text-[10px] mt-4 leading-relaxed">
-            Innovation #1: Student with 50+ txns is 10× more anomalous than self-employed with same count
-          </p>
+          <div className="bg-black/20 p-3 rounded-xl border border-white/5">
+            <OccupationMini />
+          </div>
+          <div className="mt-4 p-3 rounded-lg bg-cyan/5 border border-cyan/10">
+            <p className="text-cyan text-[10px] font-mono leading-relaxed">
+              <span className="font-bold text-cyan mr-1">INSIGHT:</span>
+              Student with 50+ txns is 10× more anomalous than self-employed with same count.
+            </p>
+          </div>
         </div>
       </div>
 
       {/* Quick action bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-slide-up delay-300">
         {[
-          { label: "Analyze Account", icon: "🔍", route: "/analyzer", color: "hover:border-orchid/40" },
-          { label: "Ring Detection", icon: "🕸️", route: "/graph", color: "hover:border-cyan/40" },
-          { label: "Alert Queue", icon: "🚨", route: "/alerts", color: "hover:border-crimson/40" },
-          { label: "Compliance STR", icon: "📋", route: "/compliance", color: "hover:border-jade/40" },
+          { label: "Analyze Account", icon: "🔍", route: "/analyzer", color: "hover:border-orchid/40 hover:bg-orchid/5" },
+          { label: "Ring Detection", icon: "🕸️", route: "/graph", color: "hover:border-cyan/40 hover:bg-cyan/5" },
+          { label: "Alert Queue", icon: "🚨", route: "/alerts", color: "hover:border-crimson/40 hover:bg-crimson/5" },
+          { label: "Compliance STR", icon: "📋", route: "/compliance", color: "hover:border-jade/40 hover:bg-jade/5" },
         ].map(action => (
           <button
             key={action.label}
             onClick={() => navigate(action.route)}
-            className={`card-hover text-left flex items-center gap-3 p-4 ${action.color} transition-all`}
+            className={`card-hover text-left flex items-center gap-3 p-4 ${action.color} transition-all duration-300 group`}
           >
-            <span className="text-xl">{action.icon}</span>
-            <span className="text-frost/70 text-sm font-medium">{action.label}</span>
+            <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-xl border border-white/5 group-hover:scale-110 transition-transform">
+              {action.icon}
+            </div>
+            <span className="text-white text-sm font-medium group-hover:text-frost transition-colors">{action.label}</span>
           </button>
         ))}
       </div>

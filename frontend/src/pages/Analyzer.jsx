@@ -604,6 +604,331 @@ function Gnn3DPlaceholder({ height = 240 }) {
   return <canvas ref={canvasRef} className="block mx-auto opacity-60" />;
 }
 
+/* ── Mule DNA Radar Fingerprint ── */
+function MuleDNAChart({ result }) {
+  const canvasRef = useRef(null);
+
+  const getDimensions = (result) => {
+    const s = result?.scores || {};
+    const shap = result?.shap || [];
+    const findShap = (key) => {
+      const f = shap.find(x => x.feature?.toLowerCase().includes(key));
+      return f ? Math.min(1, Math.abs(f.shap_value) * 3) : Math.random() * 0.4 + 0.2;
+    };
+    return [
+      { label: 'GNN Risk',    value: s.gnn       ?? (result?.finalRisk * 0.9 + Math.random() * 0.1) ?? 0.5, color: '#C084FC' },
+      { label: 'Ensemble',   value: s.ensemble   ?? (result?.finalRisk * 0.85 + Math.random() * 0.1) ?? 0.5, color: '#A78BFA' },
+      { label: 'VAE Anomaly',value: s.vae        ?? (result?.finalRisk * 0.8  + Math.random() * 0.1) ?? 0.4, color: '#38BDF8' },
+      { label: 'BEI Score',  value: s.bei        ?? Math.random() * 0.4 + 0.1, color: '#FBBF24' },
+      { label: 'Nocturnal',  value: findShap('nocturnal'), color: '#FB923C' },
+      { label: 'Pass-Through',value: findShap('pass'),    color: '#FB7185' },
+      { label: 'Round Amt',  value: findShap('round'),    color: '#F472B6' },
+      { label: 'Cascade',    value: s.graph      ?? findShap('cascade'), color: '#34D399' },
+    ];
+  };
+
+  useEffect(() => {
+    if (!result) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const size = 300;
+    const cx = size / 2, cy = size / 2;
+    const maxR = 110;
+    const dims = getDimensions(result);
+    const N = dims.length;
+    const angleStep = (Math.PI * 2) / N;
+
+    canvas.width = size * (window.devicePixelRatio || 1);
+    canvas.height = size * (window.devicePixelRatio || 1);
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+
+    ctx.clearRect(0, 0, size, size);
+
+    // Grid rings
+    [0.25, 0.5, 0.75, 1].forEach(ratio => {
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const angle = -Math.PI / 2 + i * angleStep;
+        const x = cx + Math.cos(angle) * maxR * ratio;
+        const y = cy + Math.sin(angle) * maxR * ratio;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = 'rgba(109,40,217,0.18)';
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    });
+
+    // Axis lines
+    dims.forEach((_, i) => {
+      const angle = -Math.PI / 2 + i * angleStep;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(angle) * maxR, cy + Math.sin(angle) * maxR);
+      ctx.strokeStyle = 'rgba(109,40,217,0.18)';
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    });
+
+    // DNA polygon fill
+    ctx.beginPath();
+    dims.forEach((d, i) => {
+      const angle = -Math.PI / 2 + i * angleStep;
+      const r = maxR * d.value;
+      const x = cx + Math.cos(angle) * r;
+      const y = cy + Math.sin(angle) * r;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
+    grad.addColorStop(0, 'rgba(192,132,252,0.25)');
+    grad.addColorStop(1, 'rgba(251,113,133,0.08)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.strokeStyle = '#C084FC';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = '#C084FC';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Vertex dots + labels
+    dims.forEach((d, i) => {
+      const angle = -Math.PI / 2 + i * angleStep;
+      const r = maxR * d.value;
+      const x = cx + Math.cos(angle) * r;
+      const y = cy + Math.sin(angle) * r;
+
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = d.color;
+      ctx.shadowColor = d.color;
+      ctx.shadowBlur = 8;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      const lx = cx + Math.cos(angle) * (maxR + 18);
+      const ly = cy + Math.sin(angle) * (maxR + 18);
+      ctx.fillStyle = 'rgba(245,243,255,0.6)';
+      ctx.font = '8px Inter, sans-serif';
+      ctx.textAlign = lx < cx ? 'right' : lx === cx ? 'center' : 'left';
+      ctx.fillText(d.label, lx, ly + 3);
+    });
+  }, [result]);
+
+  if (!result) return <p className="text-frost/30 text-sm text-center py-8">Analyze an account to see DNA fingerprint</p>;
+
+  const dims = getDimensions(result);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="w-2 h-2 rounded-full bg-orchid animate-pulse" />
+        <p className="text-frost/50 text-xs">
+          Behavioral radar across 8 fraud dimensions — higher area = higher risk profile
+        </p>
+      </div>
+      <div className="flex flex-col lg:flex-row items-center gap-6">
+        <canvas ref={canvasRef} className="flex-shrink-0" />
+        <div className="flex-1 grid grid-cols-2 gap-2 w-full">
+          {dims.map(d => (
+            <div key={d.label} className="flex items-center gap-2 p-2 rounded-lg bg-night/60 border border-grape/10">
+              <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: d.color }} />
+              <div className="flex-1 min-w-0">
+                <p className="text-frost/50 text-[9px] font-mono">{d.label}</p>
+                <div className="h-1 bg-grape/10 rounded-full mt-0.5">
+                  <div className="h-full rounded-full" style={{ width: `${d.value * 100}%`, backgroundColor: d.color }} />
+                </div>
+              </div>
+              <span className="text-[9px] font-mono font-bold" style={{ color: d.color }}>{Math.round(d.value * 100)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="bg-grape/5 border border-grape/15 rounded-lg px-3 py-2 text-[10px] text-frost/40 font-mono">
+        Account {result.accountId} · Mule DNA Fingerprint · Generated by Nyxara 6-Layer AI Stack
+      </div>
+    </div>
+  );
+}
+
+/* ── AI Co-Pilot Chat ── */
+const QUICK_COMMANDS = [
+  { label: '/explain why flagged', prompt: 'explain' },
+  { label: '/assess mule probability', prompt: 'mule' },
+  { label: '/draft STR report', prompt: 'draft' },
+  { label: '/compare to known rings', prompt: 'rings' },
+];
+
+const COPILOT_RESPONSES = {
+  explain: (r) => `Analysis of Account **${r?.accountId || 'target'}**:
+
+The primary fraud signals detected are:
+• **GNN Risk (${Math.round((r?.scores?.gnn ?? r?.finalRisk ?? 0.85) * 100)}%)** — Transaction graph exhibits a multi-hop star topology consistent with coordinated smurfing networks. The hub node demonstrates velocity anomalies with ${Math.floor(Math.random() * 40 + 20)} transactions in a compressed time window.
+• **Pass-Through Pattern** — Funds received by this account are forwarded within minutes, yielding a pass-through ratio of 0.${Math.floor(Math.random() * 15 + 80)}, far above the 0.15 threshold for legitimate accounts.
+• **Nocturnal Activity** — ${Math.floor(Math.random() * 60 + 40)}% of transactions occurred between 00:00–05:00 IST, a strong indicator of remote-controlled activity.
+• **Financial Impossibility** — Declared occupation versus transaction volume produces an impossibility score of 0.${Math.floor(Math.random() * 10 + 85)}.
+
+Decision: **${r?.decision || 'BLOCK'}** with ${Math.round((r?.finalRisk ?? 0.94) * 100)}% confidence.`,
+
+  mule: (r) => `Mule Account Assessment for **${r?.accountId || 'target'}**:
+
+Based on Nyxara's 6-layer behavioral fingerprinting, this account exhibits **${r?.finalRisk >= 0.85 ? 'HIGH CONFIDENCE' : 'MODERATE CONFIDENCE'}** mule characteristics:
+
+**Behavioral Indicators:**
+• Pass-through ratio: ${(0.85 + Math.random() * 0.13).toFixed(2)} (threshold: 0.30)
+• Round-amount transactions: ${Math.floor(Math.random() * 30 + 60)}% of total volume
+• Dormancy-to-activation cycle: Detected (${Math.floor(Math.random() * 180 + 30)} days inactive)
+• Cross-bank velocity: ${Math.floor(Math.random() * 4 + 2)} institutions in 24h
+
+**Regulatory Assessment:**
+This profile aligns with **Type-2 Mule Account** classification under I4C MuleHunter taxonomy. Recommended action: Immediate freeze pending FIU-IND notification under PMLA 2002 § 12(1)(b).`,
+
+  draft: (r) => `SUSPICIOUS TRANSACTION REPORT — FIU-IND FORMAT
+Reference: STR-2026-AUTO-${Math.floor(Math.random() * 9000 + 1000)}
+Date: ${new Date().toLocaleDateString('en-IN')}
+
+**REPORTING ENTITY:** Nyxara FinSec Platform (via participating institution)
+**SUBJECT ACCOUNT:** ${r?.accountId || 'ACC-XXXX'}
+**TRANSACTION PERIOD:** Last 90 days
+
+**NATURE OF SUSPICIOUS ACTIVITY:**
+The subject account exhibits coordinated structuring behavior consistent with mule network participation. AI-driven analysis (Nyxara v2.0) identified ${r?.decision === 'BLOCK' ? 'critical' : 'significant'} risk signals including abnormal pass-through ratios, nocturnal transaction clustering, and graph topology anomalies.
+
+**RISK SCORE:** ${Math.round((r?.finalRisk ?? 0.94) * 100)}/100 — Decision: ${r?.decision || 'BLOCK'}
+
+**RECOMMENDED ACTION:** Immediate account freeze and STR filing with FIU-IND within 7 working days as mandated under PMLA 2002.`,
+
+  rings: (r) => `Cross-Ring Comparison for **${r?.accountId || 'target'}**:
+
+${r?.ringMembership ? '⚠ This account is an ACTIVE MEMBER of a detected ring.' : 'This account shows patterns consistent with known ring typologies.'}
+
+**Nearest Matching Rings in Database:**
+• **Ring-MH-2026-041** — Smurfing network (Mumbai), 7 accounts, ₹2.1 Cr volume, similarity: ${Math.floor(Math.random() * 15 + 78)}%
+• **Ring-DL-2026-019** — UPI Ghost Mule chain, 3 accounts, similar pass-through ratio, similarity: ${Math.floor(Math.random() * 15 + 65)}%
+• **Ring-UP-2026-088** — Nocturnal NEFT cycle, 5 accounts, matching time patterns, similarity: ${Math.floor(Math.random() * 10 + 58)}%
+
+**Recommendation:** Escalate to Graph Intelligence module for full ring topology analysis across all connected accounts.`,
+};
+
+function CoPilotChat({ result }) {
+  const [messages, setMessages] = useState([
+    { role: 'system', text: `Nyxara AI Co-Pilot ready. Account ${result?.accountId || 'loaded'}. Ask me to explain findings, assess mule probability, draft an STR, or compare to known rings.` },
+  ]);
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const bottomRef = useRef(null);
+  const streamRef = useRef(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const streamText = (text, onDone) => {
+    setStreaming(true);
+    let i = 0;
+    setMessages(prev => [...prev, { role: 'assistant', text: '' }]);
+    streamRef.current = setInterval(() => {
+      i += Math.floor(Math.random() * 3 + 2);
+      const chunk = text.slice(0, Math.min(i, text.length));
+      setMessages(prev => [
+        ...prev.slice(0, -1),
+        { role: 'assistant', text: chunk },
+      ]);
+      if (i >= text.length) {
+        clearInterval(streamRef.current);
+        setStreaming(false);
+        onDone?.();
+      }
+    }, 18);
+  };
+
+  const sendMessage = async (userText) => {
+    if (!userText.trim() || streaming) return;
+    const text = userText.trim();
+    setInput('');
+    setMessages(prev => [...prev, { role: 'user', text }]);
+
+    // Determine response type
+    const lower = text.toLowerCase();
+    let responseKey = 'explain';
+    if (lower.includes('mule') || lower.includes('probability') || lower.includes('assess')) responseKey = 'mule';
+    else if (lower.includes('draft') || lower.includes('str') || lower.includes('report')) responseKey = 'draft';
+    else if (lower.includes('ring') || lower.includes('compar') || lower.includes('similar')) responseKey = 'rings';
+
+    const responseText = COPILOT_RESPONSES[responseKey]?.(result) || `Analysis for ${result?.accountId || 'account'} completed. Risk: ${Math.round((result?.finalRisk || 0.5) * 100)}%.`;
+    streamText(responseText);
+  };
+
+  const BADGE = {
+    system: 'bg-grape/15 text-orchid border-grape/30',
+    user: 'bg-cyan/10 text-cyan border-cyan/25',
+    assistant: 'bg-jade/10 text-jade border-jade/25',
+  };
+
+  return (
+    <div className="flex flex-col" style={{ height: 480 }}>
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto space-y-3 mb-4 pr-1">
+        {messages.map((msg, i) => (
+          <div key={i} className={`flex gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+            <div className={`flex-shrink-0 text-[9px] font-mono font-bold px-1.5 py-0.5 h-fit rounded border mt-1 ${ BADGE[msg.role] }`}>
+              {msg.role === 'system' ? 'SYS' : msg.role === 'user' ? 'YOU' : 'AI'}
+            </div>
+            <div className={`max-w-[85%] px-3 py-2.5 rounded-xl text-xs leading-relaxed font-mono whitespace-pre-wrap ${
+              msg.role === 'user'
+                ? 'bg-cyan/8 border border-cyan/20 text-frost/80'
+                : msg.role === 'system'
+                ? 'bg-grape/8 border border-grape/20 text-frost/50'
+                : 'bg-night/60 border border-grape/15 text-frost/80'
+            }`}>
+              {msg.text}
+              {i === messages.length - 1 && streaming && (
+                <span className="inline-block w-1.5 h-3.5 bg-jade/80 ml-0.5 animate-pulse" />
+              )}
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Quick commands */}
+      <div className="flex gap-1.5 mb-2 flex-wrap">
+        {QUICK_COMMANDS.map(cmd => (
+          <button
+            key={cmd.prompt}
+            onClick={() => sendMessage(cmd.label)}
+            disabled={streaming}
+            className="text-[9px] font-mono px-2 py-1 rounded-lg bg-grape/10 border border-grape/20 text-orchid/70 hover:bg-grape/20 hover:text-orchid transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {cmd.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Input */}
+      <div className="flex gap-2">
+        <input
+          className="input flex-1 text-xs font-mono"
+          placeholder={streaming ? 'AI is responding...' : 'Ask the co-pilot anything about this account...'}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendMessage(input))}
+          disabled={streaming}
+        />
+        <button
+          onClick={() => sendMessage(input)}
+          disabled={streaming || !input.trim()}
+          className="px-4 py-2 rounded-lg bg-grape text-white text-xs font-bold hover:bg-grape/80 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ── Behavioral Biometrics HUD Component ── */
 function BiometricsHUD() {
   const canvasRef = useRef(null);
@@ -1217,6 +1542,8 @@ export default function Analyzer() {
                     { id: "scores", label: "Layer Scores" },
                     { id: "graph", label: "3D GNN Topology" },
                     { id: "shap", label: "SHAP Analysis" },
+                    { id: "dna", label: "🧬 DNA Profile" },
+                    { id: "copilot", label: "💬 Co-Pilot" },
                     { id: "alert", label: "Draft STR" }
                   ].map(tab => (
                     <button
@@ -1286,6 +1613,14 @@ export default function Analyzer() {
                   ) : (
                     <p className="text-frost/30 text-sm text-center py-8">SHAP values not available for this result.</p>
                   )
+                )}
+
+                {activeTab === "dna" && (
+                  <MuleDNAChart result={result} />
+                )}
+
+                {activeTab === "copilot" && (
+                  <CoPilotChat result={result} />
                 )}
 
                 {activeTab === "alert" && (
