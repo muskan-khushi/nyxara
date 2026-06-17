@@ -12,7 +12,7 @@ ai-engine/models/artifacts/*.pth
 ai-engine/models/artifacts/*.pt
 
 # Dataset (never commit customer data)
-data/
+
 *.xlsx
 *.csv
 
