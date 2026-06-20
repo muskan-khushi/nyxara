@@ -13,8 +13,6 @@
 
 > *"A federated, privacy-preserving graph intelligence framework for dismantling decentralized money-laundering topologies — trained on 9,082 real accounts × 3,924 features, achieving 0.982 AUC-ROC at ₹0 infrastructure cost."*
 
-**National Level FinSec Hackathon Submission · Team Nyxara · June 2026**
-
 ---
 
 ## 🚀 Live Demo
@@ -1172,9 +1170,6 @@ This work builds upon the following peer-reviewed research:
 
 ---
 
-## 20. Team
-
-**Team Nyxara** — National Level FinSec Hackathon, June 2026
 
 > *"Built in the belief that the best fraud detection doesn't just find criminals — it understands networks."*
 
