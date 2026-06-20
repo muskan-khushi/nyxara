@@ -24,24 +24,22 @@ export const mockEndpoints = {
   },
   "/api/accounts/analyze": {
     data: { 
-      result: { 
-        accountId: "ACC-MOCK-DEMO", 
-        finalRisk: 0.98, 
-        decision: "BLOCK", 
-        riskFactors: ["Rapid Transfer", "Known Fraud Entity"],
-        ringMembership: true,
-        scores: { gnn: 0.96, ensemble: 0.94, vae: 0.88, bei: 0.72, graph: 0.99 },
-        shap: [
-          { feature: "F3836_Avg_Txn", shap_value: 0.42, raw_value: 450000 },
-          { feature: "F3894_Velocity", shap_value: 0.38, raw_value: 85 },
-          { feature: "F527_PassThrough", shap_value: 0.31, raw_value: 0.94 },
-          { feature: "F1692_LinkedDevices", shap_value: 0.25, raw_value: 6 },
-          { feature: "F3891_Occupation", shap_value: 0.18, raw_value: "student" },
-          { feature: "F2956_Nocturnal", shap_value: 0.15, raw_value: 0.45 },
-          { feature: "F3043_AccountAge", shap_value: -0.05, raw_value: 25 }
-        ],
-        graphData: { nodes: [], edges: [] }
-      } 
+      accountId: "ACC-MOCK-DEMO", 
+      finalRisk: 0.98, 
+      decision: "BLOCK", 
+      riskFactors: ["Rapid Transfer", "Known Fraud Entity"],
+      ringMembership: true,
+      scores: { gnn: 0.96, ensemble: 0.94, vae: 0.88, bei: 0.72, graph: 0.99 },
+      shap: [
+        { feature: "F3836_Avg_Txn", shap_value: 0.42, raw_value: 450000 },
+        { feature: "F3894_Velocity", shap_value: 0.38, raw_value: 85 },
+        { feature: "F527_PassThrough", shap_value: 0.31, raw_value: 0.94 },
+        { feature: "F1692_LinkedDevices", shap_value: 0.25, raw_value: 6 },
+        { feature: "F3891_Occupation", shap_value: 0.18, raw_value: "student" },
+        { feature: "F2956_Nocturnal", shap_value: 0.15, raw_value: 0.45 },
+        { feature: "F3043_AccountAge", shap_value: -0.05, raw_value: 25 }
+      ],
+      graphData: { nodes: [], edges: [] }
     }
   },
   "/api/rings": {

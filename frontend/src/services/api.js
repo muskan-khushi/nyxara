@@ -23,9 +23,13 @@ api.interceptors.response.use(
     if (err.message === "Network Error" || !err.response || err.code === "ECONNREFUSED") {
       console.warn(`[Offline Fallback] Returning mock data for ${err.config.url}`);
       
-      // Remove query params to match the base URL in our mock config
-      const urlWithoutParams = err.config.url.split('?')[0];
-      const mockResponse = getMockResponse(urlWithoutParams);
+      // Remove query params and extract pathname to match the base URL in our mock config
+      let path = err.config.url.split('?')[0];
+      try {
+        path = new URL(path, window.location.origin).pathname;
+      } catch (e) {}
+      
+      const mockResponse = getMockResponse(path);
       
       return Promise.resolve(mockResponse);
     }
