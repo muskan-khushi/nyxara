@@ -22,7 +22,6 @@ REQUIRED_ARTIFACTS = [
     "gnn_model.pth",
     "vae_model.pth",
     "vae_threshold.json",
-    "eval_report.json",
     "model_meta.json",
 ]
 

@@ -110,28 +110,39 @@ async function seed() {
 
   // ── Create Demo Accounts ──────────────────────────────────
   const accounts = [];
-  const decisions = ["APPROVE", "REVIEW", "FLAG", "BLOCK"];
-  const decisionWeights = [0.55, 0.20, 0.15, 0.10]; // Realistic distribution
 
-  for (let i = 0; i < NAMES.length; i++) {
-    const name = NAMES[i];
+  // Deterministic distribution — guarantees every category is populated
+  // 50 accounts: 6 BLOCK, 9 FLAG, 12 REVIEW, 23 APPROVE
+  const ACCOUNT_COUNT = 50;
+  const decisionPlan = [];
+  for (let i = 0; i < 6; i++)  decisionPlan.push("BLOCK");
+  for (let i = 0; i < 9; i++)  decisionPlan.push("FLAG");
+  for (let i = 0; i < 12; i++) decisionPlan.push("REVIEW");
+  while (decisionPlan.length < ACCOUNT_COUNT) decisionPlan.push("APPROVE");
+  // Shuffle the plan so decisions aren't in order
+  for (let i = decisionPlan.length - 1; i > 0; i--) {
+    const j = randInt(0, i + 1);
+    [decisionPlan[i], decisionPlan[j]] = [decisionPlan[j], decisionPlan[i]];
+  }
+
+  // Expand names list to cover all 50 accounts
+  const EXTRA_NAMES = [
+    "Aditya Kapoor", "Nisha Jain", "Rajesh Menon", "Deepika Bose", "Varun Srinivasan",
+    "Lakshmi Pillai", "Harsh Bansal", "Swati Deshmukh", "Gaurav Chauhan", "Pallavi Hegde",
+    "Suresh Naidu", "Amrita Sen", "Vivek Chandra", "Neha Karnik", "Pranav Rathi",
+    "Divya Chowdhury", "Akash Luthra", "Shalini Mukherjee", "Kunal Dhawan", "Jaya Sundaram",
+    "Manoj Pandey", "Ritu Grover", "Sahil Tandon", "Bhavna Choudhary", "Tarun Oberoi",
+    "Geeta Venkatesh", "Rajiv Mishra", "Sonali Thakur", "Ashwin Nambiar", "Megha Shetty",
+  ];
+  const ALL_NAMES = [...NAMES, ...EXTRA_NAMES];
+
+  for (let i = 0; i < ACCOUNT_COUNT; i++) {
+    const name = ALL_NAMES[i % ALL_NAMES.length];
     const occupation = pick(OCCUPATIONS);
-    const bankIdx = i % BANKS.length;
-
-    // Determine if this account should be suspicious
-    const roll = Math.random();
-    let decision, riskScore;
-    let cumulative = 0;
-    for (let d = 0; d < decisions.length; d++) {
-      cumulative += decisionWeights[d];
-      if (roll <= cumulative) {
-        decision = decisions[d];
-        break;
-      }
-    }
-    decision = decision || "APPROVE";
+    const decision = decisionPlan[i];
 
     // Generate risk score based on decision
+    let riskScore;
     switch (decision) {
       case "APPROVE": riskScore = rand(0.05, 0.39); break;
       case "REVIEW":  riskScore = rand(0.40, 0.69); break;

@@ -64,6 +64,8 @@ class BatchScoreRequest(BaseModel):
 class MetricsResponse(BaseModel):
     auc: float
     f1: float
+    precision: float
+    recall: float
     confusion_matrix: list[list[int]]
     n_train: int
     n_test: int
