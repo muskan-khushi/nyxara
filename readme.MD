@@ -17,9 +17,14 @@
 
 ## 🚀 Live Demo
 
+### **[▶ Demo Video — https://youtu.be/hwaljbAuu1U](https://youtu.be/hwaljbAuu1U)**
+
 ### **[▶ Launch Prototype — nyxara-alpha.vercel.app](https://nyxara-alpha.vercel.app/)**
 
 > Demo credentials: `admin@nyxara.ai` / `nyxara2026`
+
+
+
 >
 > All AI scoring, graph intelligence, compliance generation, and biometric detection are fully operational in the live deployment.
 
